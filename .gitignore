@@ -163,3 +163,5 @@ cython_debug/
 
 /val_img
 /weights
+/val_img_custom_mse
+/weights_custom_mse

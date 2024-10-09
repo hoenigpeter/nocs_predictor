@@ -18,13 +18,13 @@ import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 
-from model import Autoencoder as ae
+from dino_model import Autoencoder as ae
 
-from nocs_dataset import NOCSTrain
+from nocs_dataset_multi_object import NOCSTrain
 
 def setup_environment(gpu_id):
-    if len(sys.argv) != 3:
-        print("Usage: python3 train.py <gpu_id> <obj_id>")
+    if len(sys.argv) != 2:
+        print("Usage: python3 train.py <gpu_id>")
         sys.exit()
 
     if gpu_id == '-1':
@@ -32,7 +32,7 @@ def setup_environment(gpu_id):
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
      
 def main():
-    max_epochs = 50
+    max_epochs = 300
     batch_size = 16
 
     augmentation_prob=1.0
@@ -43,11 +43,9 @@ def main():
     epsilon = 1e-8
 
     setup_environment(sys.argv[1])
-    
-    obj_id = sys.argv[2]
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    dataset_train = NOCSTrain(data_root = "/ssd3/datasets_bop/nocs_training_set", size=256, obj_id=obj_id, crop_object = True, fraction=1.0, augment=True)
+    dataset_train = NOCSTrain(data_root = "/ssd3/datasets_bop/megapose_nocs", size=224, obj_ids=None, crop_object = True, fraction=1.0, augment=True)
     
     train_dataloader = torch.utils.data.DataLoader(
         dataset_train,
@@ -57,23 +55,16 @@ def main():
         drop_last=True
     )
 
-    weight_dir = "./weights"
+    weight_dir = "./weights_big"
     if not(os.path.exists(weight_dir)):
             os.makedirs(weight_dir)
 
-    obj_weight_dir = weight_dir + "/" + str(obj_id)
-    if not(os.path.exists(obj_weight_dir)):
-            os.makedirs(obj_weight_dir)    
-
-    val_img_dir = "./val_img/"
+    val_img_dir = "./val_img_big"
     if not(os.path.exists(val_img_dir)):
         os.makedirs(val_img_dir)
 
-    obj_val_img_dir = val_img_dir + "/" + str(obj_id)
-    if not(os.path.exists(obj_val_img_dir)):
-        os.makedirs(obj_val_img_dir)    
 
-    generator = ae(input_resolution=256)
+    generator = ae(input_resolution=224)
     generator.to(device)
 
     mse_loss = torch.nn.MSELoss()
@@ -113,8 +104,7 @@ def main():
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
 
-        imgfn = obj_val_img_dir + "/{:03d}.jpg".format(epoch)
-
+        imgfn = val_img_dir + "/{:03d}.jpg".format(epoch)
 
         gen_images = generator(rgb_images_gt)
         f,ax = plt.subplots(10,3,figsize=(10,20))
@@ -123,14 +113,15 @@ def main():
             ax[i,0].imshow( ( (xyz_images_gt[i]+1)/2).detach().cpu().numpy().transpose(1, 2, 0) )
             ax[i,1].imshow( ( (rgb_images_gt[i]+1)/2).detach().cpu().numpy().transpose(1, 2, 0)  )
             ax[i,2].imshow( ( (gen_images[i]+1)/2).detach().cpu().numpy().transpose(1, 2, 0) )
-        plt.savefig(imgfn)
+        plt.savefig(imgfn, dpi=300)
         plt.close()
         
         scheduler_generator.step()
 
         if epoch % 5 == 0:
-            torch.save(generator.state_dict(), os.path.join(obj_weight_dir, f'generator_epoch_{epoch}.pth'))
+            torch.save(generator.state_dict(), os.path.join(weight_dir, f'generator_epoch_{epoch}.pth'))
         epoch += 1
+        iteration = 0
 
 # Run the main function
 if __name__ == "__main__":
