@@ -1,0 +1,21 @@
+name: multidino
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.9
+  - numpy
+  - matplotlib
+  - pillow
+  - pytorch
+  - torchvision
+  - cudatoolkit=11.3
+  - pytorch3d
+  - transformers
+  - imgaug
+  - tqdm
+  - tensorboard
+  - pip
+  - pip:
+      - webdataset
+      - multidino

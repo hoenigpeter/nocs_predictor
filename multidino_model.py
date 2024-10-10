@@ -96,59 +96,45 @@ class MultiDINO(nn.Module):
 
         features = config.fusion_hidden_size
 
-        # self.mask_head = nn.Sequential(
-        #     nn.Conv2d(features, features // 2, kernel_size=3, stride=1, padding=1),
-        #     nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),
-        #     nn.Conv2d(features // 2, 32, kernel_size=3, stride=1, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(32, 1, kernel_size=1, stride=1, padding=0),
-        #     nn.Sigmoid(),
-        # )
+        # Stack of 10 self-attention blocks
+        # self.attention_blocks = nn.ModuleList([
+        #     nn.TransformerEncoderLayer(d_model=feature_dim, nhead=8) for _ in range(num_blocks)
+        # ])
 
-        self.mask_head = nn.Sequential(
+        self.geometry_neck = nn.Sequential(
             nn.Conv2d(features, features // 2, kernel_size=3, stride=1, padding=1),
             nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),  # Upsample to double the size
             nn.Conv2d(features // 2, 32, kernel_size=3, stride=1, padding=1),
             nn.ReLU(),
+        )
+
+        self.mask_head = nn.Sequential(
             nn.Conv2d(32, 1, kernel_size=1, stride=1, padding=0),  # Output a single channel mask
             nn.Upsample(size=(224, 224), mode="bilinear", align_corners=True),  # Ensure output is 224x224
             nn.Sigmoid(),  # Use sigmoid to squash output between 0 and 1
         )
 
         self.nocs_head = nn.Sequential(
-            nn.Conv2d(features, features // 2, kernel_size=3, stride=1, padding=1),
-            nn.Upsample(scale_factor=2, mode="bilinear", align_corners=True),  # Upsample to double the size
-            nn.Conv2d(features // 2, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
             nn.Conv2d(32, self.num_bins * 3, kernel_size=1, stride=1, padding=0),  # Output a single channel mask
             nn.Upsample(size=(224, 224), mode="bilinear", align_corners=True),  # Ensure output is 224x224
         )
 
         self.rotation_head = nn.Sequential(
-            nn.Conv2d(features, features // 2, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(features // 2, 32, kernel_size=3, stride=1, padding=1),
-            nn.ReLU(),
             nn.Conv2d(32, 4, kernel_size=1, stride=1, padding=0),  # Output 4 components of the quaternion
             nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to reduce to (batch_size, 4, 1, 1)
             nn.Flatten()  # Flatten to shape (batch_size, 4)
         )
 
-        # Stack of 10 self-attention blocks
-        # self.attention_blocks = nn.ModuleList([
-        #     nn.TransformerEncoderLayer(d_model=feature_dim, nhead=8) for _ in range(num_blocks)
-        # ])
-        
-        # Small MLP for predicting a 3x3 rotation matrix
-        self.rotation_mlp = nn.Sequential(
-            nn.Linear(196 * feature_dim, 128),  # Input is flattened (197 tokens, each with 768 features)
-            nn.ReLU(),
-            nn.Linear(128, 64),
-            nn.ReLU(),
-            nn.Linear(64, 9),  # Output a 9-element vector that can be reshaped into a 3x3 matrix
-            nn.Tanh()  # Keep the values bounded between -1 and 1
-        )
-
+        # self.rotation_head = nn.Sequential(
+        #     nn.Conv2d(features, features // 2, kernel_size=3, stride=1, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(features // 2, 32, kernel_size=3, stride=1, padding=1),
+        #     nn.ReLU(),
+        #     nn.Conv2d(32, 4, kernel_size=1, stride=1, padding=0),  # Output 4 components of the quaternion
+        #     nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to reduce to (batch_size, 4, 1, 1)
+        #     nn.Flatten()  # Flatten to shape (batch_size, 4)
+        # )
+       
     def forward(self, x):
         outputs = self.dpt(
             x,
@@ -158,12 +144,13 @@ class MultiDINO(nn.Module):
             return_dict=False,
         )
       
+        geometry_features = self.geometry_neck(outputs)
         # Instance mask prediction [batch_size, 1, 224, 224]
-        mask = self.mask_head(outputs)
+        mask = self.mask_head(geometry_features)
         # # NOCS map prediction [batch_size, 3, 224, 224]
-        nocs_logits = self.nocs_head(outputs)
+        nocs_logits = self.nocs_head(geometry_features)
         
-        rotation = self.rotation_head(outputs)
+        rotation = self.rotation_head(geometry_features)
 
         batch_size = nocs_logits.size(0)
         nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, 224, 224)

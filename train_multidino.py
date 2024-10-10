@@ -1,5 +1,3 @@
-# code adapted from: https://github.com/kirumang/Pix2Pose
-
 import os
 import sys
 
@@ -166,8 +164,6 @@ def main():
     # Move the model to GPU
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    mse_loss = torch.nn.MSELoss()
-    segmentation_loss = nn.BCELoss()
     nocs_logits_loss = nn.CrossEntropyLoss()
 
     optimizer_generator = optim.Adam(generator.parameters(), lr=lr, betas=(beta1, beta2), eps=epsilon)
@@ -183,10 +179,10 @@ def main():
     
 
     train_dataloader = wds.WebLoader(
-        train_dataset, batch_size=batch_size, shuffle=False, num_workers=16, collate_fn=custom_collate_fn,
+        train_dataset, batch_size=batch_size, shuffle=False, num_workers=16, drop_last=True, collate_fn=custom_collate_fn,
     )
     val_dataloader = wds.WebLoader(
-            val_dataset, batch_size=batch_size, shuffle=False, num_workers=16, collate_fn=custom_collate_fn,
+            val_dataset, batch_size=batch_size, shuffle=False, num_workers=16, drop_last=True, collate_fn=custom_collate_fn,
     )
 
     for epoch in range(max_epochs):
@@ -201,23 +197,8 @@ def main():
         generator.train()
 
         train_dataloader.unbatched().shuffle(10000).batched(batch_size)
-
-        # train_dataloader = DataLoader(
-        #     train_dataset,
-        #     batch_size=batch_size,
-        #     num_workers=num_workers,
-        #     drop_last=True,
-        #     collate_fn=custom_collate_fn)
-
         val_dataloader.unbatched().shuffle(10000).batched(batch_size)
-
-        # val_dataloader = DataLoader(
-        #     val_dataset,
-        #     batch_size=batch_size,
-        #     num_workers=num_workers,
-        #     drop_last=True,
-        #     collate_fn=custom_collate_fn)
-        
+       
         for step, batch in enumerate(train_dataloader):
             start_time_iteration = time.time()
 
@@ -401,6 +382,7 @@ def main():
 
         val_iter = 0
         start_time_epoch = time.time()
+
         for step, batch in enumerate(val_dataloader):
             rgb_images = batch['rgb']
             mask_images = batch['mask']
@@ -413,7 +395,7 @@ def main():
             mask_images_gt = mask_images.float() / 255.0
             mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
 
-            #rgb_images_segmented = rgb_images.float() * mask_images
+            #rgb_images = rgb_images.float() * mask_images
             rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
 
             rgb_images = (rgb_images.float() / 127.5) - 1
@@ -427,10 +409,13 @@ def main():
             nocs_images_normalized_gt = nocs_images_normalized.to(device)
             mask_images_gt = mask_images_gt.to(device)
 
-            nocs_logits, masks_estimated, rotation_estimated = generator(rgb_images_gt)
+            nocs_logits, masks_estimated, quaternion_estimated = generator(rgb_images_gt)
 
-            batch_size = nocs_logits.size(0)
-            nocs_logits = nocs_logits.view(batch_size, 3, num_bins, 224, 224)
+            quaternion_est_normalized = normalize_quaternion(quaternion_estimated)
+            quaternion_rotation_gt = matrix_to_quaternion(rotation_gt)
+
+            rot_loss = F.l1_loss(quaternion_est_normalized, quaternion_rotation_gt)
+            rot_estimated_R = quaternion_to_matrix(quaternion_estimated)
 
             scaled_nocs = (nocs_images_normalized_gt + 1) * (num_bins - 1) / 2.0
             target_bins = scaled_nocs.long().clamp(0, num_bins - 1)  # Ensure values are within bin range
@@ -446,20 +431,6 @@ def main():
             bin_centers = torch.linspace(-1, 1, num_bins).to(nocs_logits.device)  # Bin centers
             nocs_estimated = torch.sum(nocs_bins * bin_centers.view(1, 1, num_bins, 1, 1), dim=2)  # Shape [batch_size, 3, 224, 224]
         
-            rot_loss = l1_rotation_loss(rotation_estimated, rotation_gt)
-            rot_estimated_R = quaternion_to_matrix(rotation_estimated)
-
-            # print(f'NOCS Min: {nocs_estimated.min()}, Max: {nocs_estimated.max()}')
-            # print(f'NOCS GT Min: {nocs_images_normalized_gt.min()}, Max: {nocs_images_normalized_gt.max()}')
-            # print()
-            # print("nocs_estimated shape: ", nocs_estimated.shape)
-            # print("nocs_images_normalized_gt: ", nocs_images_normalized_gt.shape)
-            # print("masks_estimated: ", masks_estimated.shape)
-            # print()
-            # print(f'masks_estimated Min: {masks_estimated.min()}, Max: {masks_estimated.max()}')
-            # print(f'mask_images_gt GT Min: {mask_images_gt.min()}, Max: {mask_images_gt.max()}')
-            # print()
-
             regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
             # Threshold the masks to get binary values
             binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
@@ -476,7 +447,7 @@ def main():
             seg_loss = F.mse_loss(masks_estimated, mask_images_gt[:, 0, :, :].unsqueeze(1)) 
 
             #loss = seg_loss + rot_loss + nocs_loss
-            loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss
+            loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss + rot_loss
 
             optimizer_generator.zero_grad()
             loss.backward()
@@ -487,6 +458,7 @@ def main():
             running_regression_nocs_loss += regression_nocs_loss.item()  # Accumulate loss
             running_masked_nocs_loss += masked_nocs_loss.item()  # Accumulate loss
             running_seg_loss += seg_loss.item()  # Accumulate loss
+            running_rot_loss += rot_loss.item()  # Accumulate loss
 
             running_loss += loss.item()  # Accumulate loss
 
@@ -497,13 +469,15 @@ def main():
         avg_running_regression_nocs_loss = running_regression_nocs_loss / val_iter
         avg_running_masked_nocs_loss = running_masked_nocs_loss / val_iter
         avg_running_seg_loss = running_seg_loss / val_iter
-
+        avg_running_rot_loss = running_rot_loss / val_iter
+        
         loss_log.append({
             "epoch": epoch,
             "val_binary_nocs_loss": avg_running_binary_nocs_loss,
             "val_regression_nocs_loss": avg_running_regression_nocs_loss,
             "val_masked_nocs_loss": avg_running_masked_nocs_loss,
             "val_seg_loss": avg_running_seg_loss,
+            "val_rot_loss": avg_running_rot_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })
@@ -514,39 +488,53 @@ def main():
 
         f,ax = plt.subplots(10,6,figsize=(10,20))
         # Define arrow parameters
-        arrow_length = 0.1  # Length of the arrows
+        arrow_length = 0.3  # Length of the arrows
+        arrow_width = 0.03 
         arrow_color = 'red'  # Color of the arrows
-        imgfn = val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
+
         for i in range(10):
-            ax[i,0].imshow( ((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-            ax[i,1].imshow( ( (nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0)  )
-            ax[i,2].imshow( ( (nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0)  )
-            ax[i,3].imshow( mask_images[i] )
-            ax[i,4].imshow( ( ((masks_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-            ax[i,5].imshow( ( ((binary_masks[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-            #ax[i,4].imshow( ( (((masks_estimated > 0.5).float()[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-        
+            ax[i, 0].imshow(((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+            ax[i, 1].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+            ax[i, 2].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+            ax[i, 3].imshow(mask_images[i])
+            ax[i, 4].imshow((((masks_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+            ax[i, 5].imshow((((binary_masks[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+
             # Plot rotation arrows
             rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
-            
-            # Define an arrow direction (e.g., along the x-axis)
-            arrow_direction = np.array([1, 0, 0])  # X-axis direction
-            
-            # Transform the arrow direction using the rotation matrix
-            transformed_arrow = rotation_matrix @ arrow_direction
-            
-            # Get the start point (you can choose the origin or any other point)
-            start_point = np.array([0.5, 0.5])  # Center of the image (in normalized coordinates)
-            
-            # Calculate end point based on the transformed arrow
-            end_point = start_point + (transformed_arrow[:2] * arrow_length)  # Only use x and y for 2D
-            
-            # Plot the arrow
-            ax[i, 0].quiver(start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
-                            (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
-                            (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
-                            angles='xy', scale_units='xy', scale=1, color=arrow_color)
 
+            # Define arrow directions for x, y, z axes
+            arrow_directions = {
+                'x': np.array([1, 0, 0]),  # X-axis direction
+                'y': np.array([0, 1, 0]),  # Y-axis direction
+                'z': np.array([0, 0, 1])   # Z-axis direction
+            }
+
+            # Define colors for the arrows
+            arrow_colors = {
+                'x': 'red',
+                'y': 'green',
+                'z': 'blue'
+            }
+
+            # Get the start point (e.g., center of the image in normalized coordinates)
+            start_point = np.array([0.5, 0.5])  # Center of the image
+
+            # Iterate over each arrow direction and plot
+            for key, direction in arrow_directions.items():
+                # Transform the arrow direction using the rotation matrix
+                transformed_arrow = rotation_matrix @ direction
+                
+                # Calculate end point based on the transformed arrow
+                end_point = start_point + (transformed_arrow[:2] * arrow_length)  # Only use x and y for 2D
+                
+                # Plot the arrow
+                ax[i, 0].quiver(
+                    start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
+                    (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
+                    (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
+                    angles='xy', scale_units='xy', scale=1, color=arrow_colors[key], width=arrow_width
+                )
 
         plt.savefig(imgfn, dpi=300)
         plt.close()
