@@ -34,15 +34,16 @@ def main():
     generator = multidino(input_resolution=config.size, num_bins=config.num_bins)
     generator.to(device)
 
-    for name, param in generator.named_parameters():
-        if not param.requires_grad:
-            print(f"Layer {name} is frozen.")
-        else:
-            print(f"Layer {name} is trainable.")
+    # for name, param in generator.named_parameters():
+    #     if not param.requires_grad:
+    #         print(f"Layer {name} is frozen.")
+    #     else:
+    #         print(f"Layer {name} is trainable.")
 
 
     # Optimizer instantiation
-    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon, weight_decay=config.weight_decay)
+    #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon, weight_decay=config.weight_decay)
+    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     # Instantiate train and val dataset + dataloaders
     train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=True)
@@ -78,6 +79,16 @@ def main():
        
         for step, batch in enumerate(train_dataloader):
             start_time_iteration = time.time()
+
+            # Update learning rate with linear warmup
+            if step < config.warmup_steps and epoch == 0:
+                lr = config.lr * (step / config.warmup_steps)
+            else:
+                lr = config.lr  # Use target learning rate after warmup
+            
+            # Update the optimizer learning rate
+            for param_group in optimizer_generator.param_groups:
+                param_group['lr'] = lr
 
             # unwrap the batch
             rgb_images = batch['rgb']
@@ -143,8 +154,7 @@ def main():
             masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
 
             # LOSSES Summation
-            loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss + rot_loss
-            loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss
+            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss + 0.0 * rot_loss
 
             # Loss backpropagation
             optimizer_generator.zero_grad()
@@ -281,7 +291,7 @@ def main():
 
                 # LOSSES Summation
                 #loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss + rot_loss
-                loss = binary_nocs_loss + regression_nocs_loss + masked_nocs_loss + seg_loss + rot_loss
+                loss = 1.0 * binary_nocs_loss + 0.5 * regression_nocs_loss + 0.5 * masked_nocs_loss + 1.0 * seg_loss + 1.0 * rot_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 

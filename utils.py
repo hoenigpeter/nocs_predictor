@@ -77,6 +77,7 @@ def preprocess(image, size, interpolation, augment=False):
     if augment:
         prob = 0.8
         seq_syn = iaa.Sequential([
+                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
                                     iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
                                     iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
                                     iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
