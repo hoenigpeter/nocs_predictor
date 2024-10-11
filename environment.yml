@@ -4,18 +4,17 @@ channels:
   - defaults
 dependencies:
   - python=3.9
-  - numpy
+  - numpy==1.24.3
   - matplotlib
   - pillow
   - pytorch
   - torchvision
   - cudatoolkit=11.3
   - pytorch3d
-  - transformers
-  - imgaug
+  - transformers==4.45.2
+  - imgaug==0.4.0
   - tqdm
   - tensorboard
   - pip
   - pip:
       - webdataset
-      - multidino
