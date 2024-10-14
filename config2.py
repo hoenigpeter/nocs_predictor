@@ -5,12 +5,12 @@ shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
 
-freeze_backbone = False
+freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train_with_rotation/scene{01..34}.tar"
-val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val_with_info/val_scene{1..2}.tar"
-# models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_5000"
+train_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_train_with_rotation/scene{01..34}.tar"
+val_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_val_with_info/val_scene{1..2}.tar"
+# models_root = "/media/ssd2/peter/datasets/housecat6d/obj_models_ply_5000"
 
 # Directories for Saving Weights and Validation Images
 weight_dir = "./weights"

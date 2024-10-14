@@ -85,8 +85,8 @@ class TransformerEncoder(nn.Module):
         return x
     
 class DPT(DPTPreTrainedModel):
-    def __init__(self, config):
-        super().__init__(config)
+    def __init__(self, config, freeze_backbone=False):
+        super().__init__(config, freeze_backbone)
 
         self.backbone = None
         if config.is_hybrid is False and (config.backbone_config is not None or config.backbone is not None):
@@ -94,8 +94,11 @@ class DPT(DPTPreTrainedModel):
         else:
             self.dpt = DPTModel(config, add_pooling_layer=False)
 
-        for param in self.backbone.parameters():
-            param.requires_grad = False
+        
+            for param in self.backbone.parameters():
+                if freeze_backbone == True:
+                    param.requires_grad = False
+                print(param)
 
         self.dpt = DPTModel(config, add_pooling_layer=False)
         self.neck = DPTNeck(config)
@@ -230,54 +233,71 @@ class UNetGeometryHead(nn.Module):
         return output
 
 class MultiDINO(nn.Module):
-    def __init__(self, input_resolution=256, num_bins=50):
+    def __init__(self, input_resolution=256, num_bins=50, freeze_backbone=False):
         super(MultiDINO, self).__init__()
 
         self.nhead = 4
         self.num_bins = num_bins
         self.input_resolution=input_resolution
         self.num_blocks = 1
+        self.freeze_backbone = freeze_backbone
 
         backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage1", "stage2", "stage3", "stage4"], reshape_hidden_states=False)
         config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
 
-        self.dpt = DPT(config)
+        self.dpt = DPT(config, self.freeze_backbone)
 
         #self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=3072*2, nhead=self.nhead, patch_size=16)
 
-        self.geometry_head = UNetGeometryHead()
+        #self.geometry_head = UNetGeometryHead()
 
         # self.geometry_head = nn.Sequential(
         #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
         #     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),
-        #     nn.ReLU(),
-        #     nn.Conv2d(64, 32, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
         #     nn.ReLU(),
         # )
 
         # Mask head
         self.mask_head = nn.Sequential(
-            nn.Conv2d(128, 1, kernel_size=5, padding=2),  # Input channels from geometry head
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
-            nn.Conv2d(1, 1, kernel_size=3, padding=1),  # Additional layer for more capacity
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, 1, kernel_size=3, padding=1),  # Input channels from geometry head
             nn.Sigmoid()
         )
 
         # NOCS head
-        self.nocs_head = nn.Sequential(
-            nn.Conv2d(128, 3 * self.num_bins, kernel_size=5, padding=2),
+        self.x_head = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
-            nn.Conv2d(3 * self.num_bins, 3 * self.num_bins, kernel_size=3, padding=1),  # Additional layer
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Additional layer
+        )
+        self.y_head = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Additional layer
+        )
+        self.z_head = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Additional layer
         )
 
         # Rotation head
-        self.rotation_head = nn.Sequential(
-            nn.Conv2d(128, 4, kernel_size=1, stride=1, padding=0),
-            nn.ReLU(),  # Activation for non-linearity
-            nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling
-            nn.Flatten()  # Flatten to shape (batch_size, 4)
-        )
+        # self.rotation_head = nn.Sequential(
+        #     nn.Conv2d(32, 4, kernel_size=1, stride=1, padding=0),
+        #     nn.ReLU(),  # Activation for non-linearity
+        #     nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling
+        #     nn.Flatten()  # Flatten to shape (batch_size, 4)
+        # )
        
     def forward(self, x):
         x_resized = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=True)
@@ -289,18 +309,21 @@ class MultiDINO(nn.Module):
             return_dict=False,
         )
 
-        outputs = self.geometry_head(outputs)   
+        #outputs = self.geometry_head(outputs)   
 
         mask = self.mask_head(outputs)
 
-        nocs_logits = self.nocs_head(outputs)
+        #nocs_logits = self.nocs_head(outputs)
+        x_logits = self.x_head(outputs)
+        y_logits = self.y_head(outputs)
+        z_logits = self.z_head(outputs)
 
-        rotation = self.rotation_head(outputs)
+        #rotation = self.rotation_head(outputs)
 
-        batch_size = nocs_logits.size(0)
-        nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
+        #batch_size = nocs_logits.size(0)
+        #nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
 
-        return nocs_logits, mask, rotation
+        return x_logits, y_logits, z_logits, mask
     
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):

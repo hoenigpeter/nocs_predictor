@@ -11,8 +11,28 @@ import matplotlib.pyplot as plt
 
 import torch 
 import webdataset as wds
+import open3d as o3d
 
-import config
+import config2 as config
+
+def preload_pointclouds(models_root):
+    pointclouds = {}
+    
+    for category in range(1, 11):  # Subfolders 1 to 10
+        category_path = os.path.join(models_root, str(category))
+        for obj_file in os.listdir(category_path):
+            if obj_file.endswith(".ply"):
+                obj_name = os.path.splitext(obj_file)[0]
+                pointcloud_file = os.path.join(category_path, obj_file)
+                
+                # Load the point cloud
+                pc_gt = o3d.io.read_point_cloud(pointcloud_file)
+                gt_points = np.asarray(pc_gt.points)
+                
+                # Store point cloud in the dictionary using category and name
+                pointclouds[(str(category), obj_name)] = gt_points
+                
+    return pointclouds
 
 def make_log_dirs(weight_dir, val_img_dir):
     weight_dir = weight_dir
@@ -57,14 +77,14 @@ class WebDatasetWrapper(Dataset):
         return self.data[idx]
 
 def create_webdataset(dataset_paths, size, shuffle_buffer, augment=False):
-    dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
+    dataset = WebDatasetWrapper(wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode("pil") \
         .shuffle(shuffle_buffer, initial=size) \
         .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
         .map_tuple( lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment), \
                     lambda mask: preprocess(mask, size, Image.NEAREST), \
                     lambda nocs: preprocess(nocs, size, Image.NEAREST),
-                    lambda info: info)
+                    lambda info: info))
     
     return dataset
 
@@ -76,15 +96,32 @@ def preprocess(image, size, interpolation, augment=False):
     
     if augment:
         prob = 0.8
+        # seq_syn = iaa.Sequential([
+        #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
+        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
+        #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
+        #                             ], random_order = False)
+
         seq_syn = iaa.Sequential([
                                     iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
+                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+                                    iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
                                     iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
                                     iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+                                    iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
+                                    iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
                                     iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-                                    ], random_order = False)
+                                    ], random_order = True)
+
         # seq_syn = iaa.Sequential([        
         #                             iaa.Sometimes(0.5 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
         #                             ], random_order = False)
@@ -111,7 +148,7 @@ def setup_environment(gpu_id):
 
 def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rot_estimated_R):
     
-    _,ax = plt.subplots(10,6,figsize=(10,20))
+    _,ax = plt.subplots(config.num_imgs_log,6,figsize=(10,20))
     
     # Define column titles
     col_titles = ['RGB Image', 'NOCS GT', 'NOCS Estimated', 'Mask GT', 'Mask Estimated', 'Mask Estimated Binary']
@@ -120,7 +157,7 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
     for i, title in enumerate(col_titles):
         ax[0, i].set_title(title, fontsize=12)
 
-    for i in range(10):
+    for i in range(config.num_imgs_log):
         ax[i, 0].imshow(((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 1].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 2].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))

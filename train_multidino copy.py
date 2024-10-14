@@ -23,22 +23,7 @@ import json
 import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, preload_pointclouds
-
-import argparse
-import importlib.util
-
-# Function to load config from the passed file
-def load_config(config_path):
-    spec = importlib.util.spec_from_file_location("config", config_path)
-    config = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(config)
-    return config
-
-# Parse command-line arguments
-def parse_args():
-    parser = argparse.ArgumentParser(description="Training Script")
-    parser.add_argument('config', type=str, help="Path to the config file")
-    return parser.parse_args()
+import config2 as config
 
 def add_loss(est_points_batch, gt_points_batch):
     """Calculate the ADD score for a batch of point clouds using GPU."""
@@ -67,14 +52,14 @@ def apply_rotation(points, rotation_matrix):
     # Transpose back to (batch_size, 1000, 3)
     return rotated_points.transpose(1, 2)
 
-def main(config):
-    setup_environment(str(config.gpu_id))
+def main():
+    setup_environment(sys.argv[1])
     make_log_dirs(config.weight_dir, config.val_img_dir)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = multidino(input_resolution=config.size, num_bins=config.num_bins, freeze_backbone=config.freeze_backbone)
+    generator = multidino(input_resolution=config.size, num_bins=config.num_bins)
     generator.to(device)
 
     # Optimizer instantiation
@@ -82,36 +67,16 @@ def main(config):
     #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     # Instantiate train and val dataset + dataloaders
-    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation)
+    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=False)
     val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False)
 
-    # train_dataloader = wds.WebLoader(
-    #     train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
-    # )
-    # val_dataloader = wds.WebLoader(
-    #         val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
-    # )
-
-    train_dataloader = DataLoader(
-        train_dataset, 
-        batch_size=config.batch_size, 
-        shuffle=True,  # Shuffle should typically be True for training
-        num_workers=config.train_num_workers, 
-        drop_last=True, 
-        collate_fn=custom_collate_fn
+    train_dataloader = wds.WebLoader(
+        train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
-
-    # Validation DataLoader
-    val_dataloader = DataLoader(
-        val_dataset, 
-        batch_size=config.batch_size, 
-        shuffle=False,  # Shuffle should be False for validation
-        num_workers=config.val_num_workers, 
-        drop_last=True, 
-        collate_fn=custom_collate_fn
+    val_dataloader = wds.WebLoader(
+            val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
-
-    # pointclouds = preload_pointclouds(config.models_root)
+    pointclouds = preload_pointclouds(config.models_root)
 
     # Training Loop
     epoch = 0
@@ -130,9 +95,9 @@ def main(config):
 
         generator.train()
 
-        # # Shuffle before epoch
-        # train_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
-        # val_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
+        # Shuffle before epoch
+        train_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
+        val_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
        
         for step, batch in enumerate(train_dataloader):
             start_time_iteration = time.time()
@@ -152,6 +117,18 @@ def main(config):
             mask_images = batch['mask']
             nocs_images = batch['nocs']
             infos = batch['info']
+
+            pcs = []
+            for entry in infos:
+                obj_name = entry["obj_name"]
+                obj_cat = entry["category_id"]
+                
+                gt_points = pointclouds[(str(obj_cat), obj_name)]
+                pcs.append(gt_points)
+
+            pcs_np = np.array(pcs)
+            pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+            pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
 
             # RGB processing
             rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
@@ -174,10 +151,18 @@ def main(config):
             rotation_gt = torch.stack(rotations).to(device)
 
             # forward pass through generator
-            x_logits, y_logits, z_logits, masks_estimated = generator(rgb_images_gt)
+            nocs_logits, masks_estimated, quaternion_estimated = generator(rgb_images_gt)
 
             # LOSSES
             # 1.) Rotation loss - from R to quat
+            quaternion_est_normalized = normalize_quaternion(quaternion_estimated)
+            rotation_est = quaternion_to_matrix(quaternion_estimated)
+
+            gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)  # Shape: (batch_size, 1000, 3)
+            est_points_transformed = apply_rotation(pcs_gt, rotation_est)  # Shape: (batch_size, 1000, 3)
+
+            #rot_loss = F.l1_loss(quaternion_est_normalized, quaternion_rotation_gt)
+            rot_loss = add_loss(est_points_transformed, gt_points_transformed)
 
             # 2.) Mask loss
             binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
@@ -189,29 +174,13 @@ def main(config):
             target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
             
             binary_nocs_loss = 0
-            binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
-            binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
-            binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
-
-            # 3.) NOCS Regression loss for each dimension
-
-            # Softmax over the bin dimension for x, y, z logits
-            x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
-            y_bins = torch.softmax(y_logits, dim=1)
-            z_bins = torch.softmax(z_logits, dim=1)
-
-            # Bin centers (shared for x, y, z dimensions)
-            bin_centers = torch.linspace(-1, 1, config.num_bins).to(x_logits.device)  # Bin centers
-
-            # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
-            nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-            nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-            nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-
-            # Combine the estimated NOCS map from x, y, and z dimensions
-            nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
-
-            # Calculate the L1 regression loss between the estimated NOCS map and ground truth
+            for i in range(3):  # Iterate over x, y, z coordinates
+                binary_nocs_loss += F.cross_entropy(nocs_logits[:, i], target_bins[:, i])
+            
+            # 3.) NOCS Regression loss
+            nocs_bins = torch.softmax(nocs_logits, dim=2)
+            bin_centers = torch.linspace(-1, 1, config.num_bins).to(nocs_logits.device)  # Bin centers
+            nocs_estimated = torch.sum(nocs_bins * bin_centers.view(1, 1, config.num_bins, 1, 1), dim=2)
             regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
             # 4.) NOCS self-supervised loss
@@ -222,7 +191,7 @@ def main(config):
             masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
 
             # LOSSES Summation
-            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss
+            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss + 1.0 * rot_loss
 
             # Loss backpropagation
             optimizer_generator.zero_grad()
@@ -236,6 +205,7 @@ def main(config):
             running_regression_nocs_loss += regression_nocs_loss.item()
             running_masked_nocs_loss += masked_nocs_loss.item()
             running_seg_loss += seg_loss.item()
+            running_rot_loss += rot_loss.item()
 
             running_loss += loss.item()
             iteration += 1
@@ -246,11 +216,12 @@ def main(config):
                 avg_running_regression_nocs_loss = running_regression_nocs_loss / 100
                 avg_running_masked_nocs_loss = running_masked_nocs_loss / 100
                 avg_running_seg_loss = running_seg_loss / 100
+                avg_running_rot_loss = running_rot_loss / 100
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, Masked NOCS Loss: {:.4f}, Seg Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
-                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, avg_running_masked_nocs_loss, avg_running_seg_loss, lr_current, elapsed_time_iteration))
+                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, Masked NOCS Loss: {:.4f}, Seg Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
+                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, avg_running_masked_nocs_loss, avg_running_seg_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
@@ -260,6 +231,7 @@ def main(config):
                     "regression_nocs_loss": avg_running_regression_nocs_loss,
                     "masked_nocs_loss": avg_running_masked_nocs_loss,
                     "seg_loss": avg_running_seg_loss,
+                    "rot_loss": avg_running_rot_loss,
                     "learning_rate": lr_current,
                     "time_per_100_iterations": elapsed_time_iteration
                 })
@@ -269,9 +241,10 @@ def main(config):
                 running_regression_nocs_loss = 0
                 running_masked_nocs_loss = 0
                 running_seg_loss = 0
+                running_rot_loss = 0
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
-                plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_gt)
+                plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_est)
 
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
@@ -296,6 +269,18 @@ def main(config):
                 nocs_images = batch['nocs']
                 infos = batch['info']
 
+                pcs = []
+                for entry in infos:
+                    obj_name = entry["obj_name"]
+                    obj_cat = entry["category_id"]
+                    
+                    gt_points = pointclouds[(str(obj_cat), obj_name)]
+                    pcs.append(gt_points)
+
+                pcs_np = np.array(pcs)
+                pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+                pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
+
                 # RGB processing
                 rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
                 rgb_images = (rgb_images.float() / 127.5) - 1
@@ -317,10 +302,18 @@ def main(config):
                 rotation_gt = torch.stack(rotations).to(device)
 
                 # forward pass through generator
-                x_logits, y_logits, z_logits, masks_estimated = generator(rgb_images_gt)
+                nocs_logits, masks_estimated, quaternion_estimated = generator(rgb_images_gt)
 
                 # LOSSES
                 # 1.) Rotation loss - from R to quat
+                quaternion_est_normalized = normalize_quaternion(quaternion_estimated)
+                rotation_est = quaternion_to_matrix(quaternion_estimated)
+
+                gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)  # Shape: (batch_size, 1000, 3)
+                est_points_transformed = apply_rotation(pcs_gt, rotation_est)  # Shape: (batch_size, 1000, 3)
+
+                #rot_loss = F.l1_loss(quaternion_est_normalized, quaternion_rotation_gt)
+                rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 3.0
 
                 # 2.) Mask loss
                 binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
@@ -332,29 +325,13 @@ def main(config):
                 target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
                 
                 binary_nocs_loss = 0
-                binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
-                binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
-                binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
-
-                # 3.) NOCS Regression loss for each dimension
-
-                # Softmax over the bin dimension for x, y, z logits
-                x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
-                y_bins = torch.softmax(y_logits, dim=1)
-                z_bins = torch.softmax(z_logits, dim=1)
-
-                # Bin centers (shared for x, y, z dimensions)
-                bin_centers = torch.linspace(-1, 1, config.num_bins).to(x_logits.device)  # Bin centers
-
-                # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
-                nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-                nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-                nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-
-                # Combine the estimated NOCS map from x, y, and z dimensions
-                nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
-
-                # Calculate the L1 regression loss between the estimated NOCS map and ground truth
+                for i in range(3):  # Iterate over x, y, z coordinates
+                    binary_nocs_loss += F.cross_entropy(nocs_logits[:, i], target_bins[:, i])
+                
+                # 3.) NOCS Regression loss
+                nocs_bins = torch.softmax(nocs_logits, dim=2)
+                bin_centers = torch.linspace(-1, 1, config.num_bins).to(nocs_logits.device)  # Bin centers
+                nocs_estimated = torch.sum(nocs_bins * bin_centers.view(1, 1, config.num_bins, 1, 1), dim=2)
                 regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
                 # 4.) NOCS self-supervised loss
@@ -365,7 +342,7 @@ def main(config):
                 masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
 
                 # LOSSES Summation
-                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss
+                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss + rot_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 
@@ -373,6 +350,7 @@ def main(config):
                 running_regression_nocs_loss += regression_nocs_loss.item()  # Accumulate loss
                 running_masked_nocs_loss += masked_nocs_loss.item()  # Accumulate loss
                 running_seg_loss += seg_loss.item()  # Accumulate loss
+                running_rot_loss += rot_loss.item()  # Accumulate loss
 
                 running_loss += loss.item()  # Accumulate loss
 
@@ -383,6 +361,7 @@ def main(config):
         avg_running_regression_nocs_loss = running_regression_nocs_loss / val_iter
         avg_running_masked_nocs_loss = running_masked_nocs_loss / val_iter
         avg_running_seg_loss = running_seg_loss / val_iter
+        avg_running_rot_loss = running_rot_loss / val_iter
         
         loss_log.append({
             "epoch": epoch,
@@ -390,6 +369,7 @@ def main(config):
             "val_regression_nocs_loss": avg_running_regression_nocs_loss,
             "val_masked_nocs_loss": avg_running_masked_nocs_loss,
             "val_seg_loss": avg_running_seg_loss,
+            "val_rot_loss": avg_running_rot_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })
@@ -399,7 +379,7 @@ def main(config):
         print("Val Loss: {:.4f}".format(avg_loss))
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
-        plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_gt)
+        plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_est)
 
         if epoch % config.save_epoch_interval == 0:
             torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
@@ -411,11 +391,6 @@ def main(config):
         epoch += 1
         iteration = 0   
 
+# Run the main function
 if __name__ == "__main__":
-    args = parse_args()
-    
-    # Load the config file passed as argument
-    config = load_config(args.config)
-    
-    # Call main with the loaded config
-    main(config)
+    main()
