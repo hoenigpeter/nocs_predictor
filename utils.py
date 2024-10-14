@@ -80,7 +80,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode("pil") \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
+        .to_tuple("rgb.png", "visib_mask.png", "nocs.png", "info.json") \
         .map_tuple( lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), \
                     lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), \
                     lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop),
@@ -121,25 +121,26 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False):
         #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
         #                             ], random_order = False)
 
-        seq_syn = iaa.Sequential([
-                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-                                    iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
-                                    iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-                                    iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-                                    iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
-                                    iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-                                    ], random_order = True)
+        # seq_syn = iaa.Sequential([
+        #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
+        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
+        #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+        #                             iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
+        #                             ], random_order = True)
 
-        # seq_syn = iaa.Sequential([        
-        #                             iaa.Sometimes(0.5 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-        #                             ], random_order = False)
+        seq_syn = iaa.Sequential([        
+                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
+                                    ], random_order = False)
+        
         img_array = seq_syn.augment_image(img_array)
 
     image = Image.fromarray(img_array)
@@ -161,24 +162,23 @@ def setup_environment(gpu_id):
         gpu_id = ''
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
-def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rot_estimated_R):
+def plot_progress_imgs(imgfn, rgb_images, rgb_images_masked, nocs_images_normalized_gt, nocs_estimated, mask_images, rot_estimated_R):
     
-    _,ax = plt.subplots(config.num_imgs_log,6,figsize=(10,20))
+    _,ax = plt.subplots(config.num_imgs_log,5,figsize=(10,20))
     
     # Define column titles
-    col_titles = ['RGB Image', 'NOCS GT', 'NOCS Estimated', 'Mask GT', 'Mask Estimated', 'Mask Estimated Binary']
+    col_titles = ['RGB Image', 'RGB Masked', 'NOCS GT', 'NOCS Estimated', 'Mask GT']
     
     # Add column titles
     for i, title in enumerate(col_titles):
         ax[0, i].set_title(title, fontsize=12)
 
     for i in range(config.num_imgs_log):
-        ax[i, 0].imshow(((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 1].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 2].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 3].imshow(mask_images[i])
-        ax[i, 4].imshow((((masks_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
-        ax[i, 5].imshow((((binary_masks[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0) * 255).astype(np.uint8))
+        ax[i, 0].imshow(rgb_images[i])
+        ax[i, 1].imshow(((rgb_images_masked[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 2].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 3].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 4].imshow(mask_images[i])
 
         # Plot rotation arrows
         rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image

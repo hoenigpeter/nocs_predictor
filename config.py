@@ -13,13 +13,12 @@ val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val_with_info/val_scene{1..2
 # models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_5000"
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_center_crop"
-val_img_dir = "./val_img_center_crop"
+weight_dir = "./weights"
+val_img_dir = "./val_img"
 
 # Input Data Settings
 size = 128
 num_bins = 50
-center_crop = True
 
 # Optimizer Settings
 lr = 1e-4

@@ -259,14 +259,14 @@ class MultiDINO(nn.Module):
         # )
 
         # Mask head
-        self.mask_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-            nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-            nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1),  # Input channels from geometry head
-            nn.Sigmoid()
-        )
+        # self.mask_head = nn.Sequential(
+        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+        #     nn.ReLU(),
+        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, 1, kernel_size=3, padding=1),  # Input channels from geometry head
+        #     nn.Sigmoid()
+        # )
 
         # NOCS head
         self.x_head = nn.Sequential(
@@ -311,7 +311,7 @@ class MultiDINO(nn.Module):
 
         #outputs = self.geometry_head(outputs)   
 
-        mask = self.mask_head(outputs)
+        # mask = self.mask_head(outputs)
 
         #nocs_logits = self.nocs_head(outputs)
         x_logits = self.x_head(outputs)
@@ -323,46 +323,7 @@ class MultiDINO(nn.Module):
         #batch_size = nocs_logits.size(0)
         #nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
 
-        return x_logits, y_logits, z_logits, mask
-
-class MultiDINOMask(nn.Module):
-    def __init__(self, input_resolution=256, num_bins=50, freeze_backbone=False):
-        super(MultiDINOMask, self).__init__()
-
-        self.nhead = 4
-        self.num_bins = num_bins
-        self.input_resolution=input_resolution
-        self.num_blocks = 1
-        self.freeze_backbone = freeze_backbone
-
-        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage1", "stage2", "stage3", "stage4"], reshape_hidden_states=False)
-        config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
-
-        self.dpt = DPT(config, self.freeze_backbone)
-
-        # Mask head
-        self.mask_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-            nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-            nn.ReLU(),
-            nn.Conv2d(64, 1, kernel_size=3, padding=1),  # Input channels from geometry head
-            nn.Sigmoid()
-        )
-
-    def forward(self, x):
-        x_resized = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=True)
-        outputs = self.dpt(
-            x_resized,
-            head_mask=None,
-            output_attentions=False,
-            output_hidden_states=False,
-            return_dict=False,
-        )
-
-        mask = self.mask_head(outputs)
-
-        return mask
+        return x_logits, y_logits, z_logits
     
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):
