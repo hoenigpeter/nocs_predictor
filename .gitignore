@@ -171,3 +171,6 @@ cython_debug/
 
 /val_img_sym
 /weights_sym
+
+/val_img_center_crop
+/weights_center_crop

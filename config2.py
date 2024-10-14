@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 32
+batch_size = 16
 shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
@@ -19,6 +19,7 @@ val_img_dir = "./val_img"
 # Input Data Settings
 size = 128
 num_bins = 50
+center_crop = True
 
 # Optimizer Settings
 lr = 1e-4

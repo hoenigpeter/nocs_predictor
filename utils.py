@@ -76,24 +76,39 @@ class WebDatasetWrapper(Dataset):
         # Retrieve an item by index
         return self.data[idx]
 
-def create_webdataset(dataset_paths, size, shuffle_buffer, augment=False):
-    dataset = WebDatasetWrapper(wds.WebDataset(dataset_paths, shardshuffle=True) \
+def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False):
+    dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode("pil") \
         .shuffle(shuffle_buffer, initial=size) \
         .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
-        .map_tuple( lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment), \
-                    lambda mask: preprocess(mask, size, Image.NEAREST), \
-                    lambda nocs: preprocess(nocs, size, Image.NEAREST),
-                    lambda info: info))
+        .map_tuple( lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), \
+                    lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), \
+                    lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop),
+                    lambda info: info)
     
     return dataset
 
-def preprocess(image, size, interpolation, augment=False):
+def preprocess(image, size, interpolation, augment=False, center_crop=False):
     img_array = np.array(image).astype(np.uint8)
-    crop = min(img_array.shape[0], img_array.shape[1])
     h, w = img_array.shape[0], img_array.shape[1]
-    img_array = img_array[(h - crop) // 2:(h + crop) // 2, (w - crop) // 2:(w + crop) // 2]
-    
+
+    if center_crop:
+        # Undo the enlargement by dividing the current image size by 1.5
+        original_size = int(min(h, w) / 1.5)
+
+        # Calculate the crop dimensions to get the center crop of original size
+        crop_xmin = (w - original_size) // 2
+        crop_xmax = crop_xmin + original_size
+        crop_ymin = (h - original_size) // 2
+        crop_ymax = crop_ymin + original_size
+
+        # Crop the image to the original size
+        img_array = img_array[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
+    else:
+        # Default center crop
+        crop = min(h, w)
+        img_array = img_array[(h - crop) // 2:(h + crop) // 2, (w - crop) // 2:(w + crop) // 2]
+
     if augment:
         prob = 0.8
         # seq_syn = iaa.Sequential([

@@ -1,11 +1,11 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 32
+batch_size = 16
 shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
 
-freeze_backbone = False
+freeze_backbone = True
 
 # Data Paths
 train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train_with_rotation/scene{01..34}.tar"
@@ -13,12 +13,13 @@ val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val_with_info/val_scene{1..2
 # models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_5000"
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights"
-val_img_dir = "./val_img"
+weight_dir = "./weights_center_crop"
+val_img_dir = "./val_img_center_crop"
 
 # Input Data Settings
 size = 128
 num_bins = 50
+center_crop = True
 
 # Optimizer Settings
 lr = 1e-4
