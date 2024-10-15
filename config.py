@@ -10,11 +10,11 @@ freeze_backbone = True
 # Data Paths
 train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train_with_rotation/scene{01..34}.tar"
 val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val_with_info/val_scene{1..2}.tar"
-# models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_5000"
+models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights"
-val_img_dir = "./val_img"
+weight_dir = "./weights_rot"
+val_img_dir = "./val_img_rot"
 
 # Input Data Settings
 size = 128
@@ -33,7 +33,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = False
+augmentation = True
 
 # Visualization Settings
 num_imgs_log = 8

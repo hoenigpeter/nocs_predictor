@@ -28,15 +28,16 @@ class PositionalEncoding(nn.Module):
         return x + pos_enc  # Add positional encoding based on sequence length
 
 class TransformerEncoder(nn.Module):
-    def __init__(self, num_blocks=10, feature_dim=768, nhead=1, patch_size=16):
+    def __init__(self, num_blocks=10, feature_dim=256, nhead=1, patch_size=16):
         super(TransformerEncoder, self).__init__()
         self.num_blocks = num_blocks
         self.feature_dim = feature_dim
         self.nhead = nhead
         self.patch_size = patch_size
-        self.positional_encoding = PositionalEncoding(feature_dim)
+        # self.positional_encoding = PositionalEncoding(feature_dim)
 
-        self.linear_proj = nn.Linear(patch_size * patch_size * 256, 3072*2)
+       # Positional encoding as a learnable parameter, with shape [1, num_patches, embed_dim]
+        self.positional_encoding = nn.Parameter(torch.randn(1, 64, 256))
 
         # Transformer encoder layers
         self.attention_blocks = nn.ModuleList([
@@ -50,37 +51,34 @@ class TransformerEncoder(nn.Module):
         # Step 1: Patch extraction
         num_patches_height = height // self.patch_size
         num_patches_width = width // self.patch_size
+        num_patches = num_patches_height * num_patches_width
         
-        # Unfold (extract patches)
-        x = x.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)
-        x = x.contiguous().view(batch_size, channels, num_patches_height * num_patches_width, self.patch_size, self.patch_size)
+        x = x.view(batch_size, channels, num_patches_height, self.patch_size, num_patches_width, self.patch_size)
+        x = x.permute(0, 2, 4, 1, 3, 5).contiguous().view(batch_size, num_patches, channels)
+
+        print()
 
         # Step 2: Flatten patches to create patch embeddings
         x = x.permute(0, 2, 1, 3, 4).contiguous()  # Rearrange to [batch_size, num_patches, channels, patch_size, patch_size]
         x = x.view(batch_size, num_patches_height * num_patches_width, -1)  # Flatten patches to [batch_size, num_patches, feature_dim]
 
-        # Step 3: Linear projection to reduce dimensionality of patches
-        x = self.linear_proj(x)  # [batch_size, num_patches, embedding_dim]
-
-        # Step 3: Add positional encodings
-        x = self.positional_encoding(x)
+        x = x + self.positional_encoding  # Positional encoding has shape [1, num_patches, embed_dim], broadcasted across batches
+        print(x.shape)
 
         # Step 4: Feed into transformer blocks
         for block in self.attention_blocks:
             x = block(x)
-       
-        # Step 2: Reshape embedding_dim into spatial dimensions
-        patch_size = 16  # From the above calculation
-        channels = 24     # Assuming 3 channels (RGB)
-        
-        # Step 3: Reshape into [batch_size, num_patches_height, num_patches_width, channels, patch_size, patch_size]
-        x = x.view(batch_size, num_patches_height, num_patches_width, channels, patch_size, patch_size)
 
-        # Step 4: Rearrange to combine patches back into the original image dimensions
-        x = x.permute(0, 3, 1, 4, 2, 5).contiguous()  # Rearrange to [batch_size, channels, height, width]
-        height = num_patches_height * self.patch_size
-        width = num_patches_width * self.patch_size
-        x = x.view(batch_size, channels, height, width)
+        # Reshape from [batch_size, num_patches, embed_dim] back to grid [batch_size, num_patches_h, num_patches_w, embed_dim]
+        x = x.view(batch_size, num_patches_height, num_patches_width, 256)
+
+        # Permute back to the original image-like shape [batch_size, embed_dim, num_patches_h, patch_size, num_patches_w, patch_size]
+        x = x.permute(0, 3, 1, 4, 2, 5).contiguous()
+
+        # Now reshape back to [batch_size, embed_dim, height, width]
+        x = x.view(batch_size, 256, height, width)
+
+        print(x.shape)
 
         return x
     
@@ -247,7 +245,7 @@ class MultiDINO(nn.Module):
 
         self.dpt = DPT(config, self.freeze_backbone)
 
-        #self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=3072*2, nhead=self.nhead, patch_size=16)
+        self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=256, nhead=self.nhead, patch_size=16)
 
         #self.geometry_head = UNetGeometryHead()
 
@@ -292,6 +290,17 @@ class MultiDINO(nn.Module):
         )
 
         # Rotation head
+        self.rotation_head = nn.Sequential(
+            nn.Conv2d(3 * self.num_bins, 128, kernel_size=3, padding=1),  # Combine x, y, z logits
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 4, kernel_size=3, padding=1),  # Output 4 channels for quaternion
+            nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling
+            nn.Flatten()  # Flatten to shape (batch_size, 4)
+        )
+
+        # Rotation head
         # self.rotation_head = nn.Sequential(
         #     nn.Conv2d(32, 4, kernel_size=1, stride=1, padding=0),
         #     nn.ReLU(),  # Activation for non-linearity
@@ -309,7 +318,7 @@ class MultiDINO(nn.Module):
             return_dict=False,
         )
 
-        #outputs = self.geometry_head(outputs)   
+        #outputs = self.geometry_head(outputs) 
 
         # mask = self.mask_head(outputs)
 
@@ -318,12 +327,16 @@ class MultiDINO(nn.Module):
         y_logits = self.y_head(outputs)
         z_logits = self.z_head(outputs)
 
+        # Concatenate NOCS logits along the channel dimension
+        nocs_logits = torch.cat((x_logits, y_logits, z_logits), dim=1)
+        quaternions = self.rotation_head(nocs_logits)
+
         #rotation = self.rotation_head(outputs)
 
         #batch_size = nocs_logits.size(0)
         #nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
 
-        return x_logits, y_logits, z_logits
+        return x_logits, y_logits, z_logits, quaternions
     
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):

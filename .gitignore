@@ -174,3 +174,8 @@ cython_debug/
 
 /val_img_center_crop
 /weights_center_crop
+
+/val_img_rot
+/val_img_with_aug
+/weights_rot
+/weights_with_aug
