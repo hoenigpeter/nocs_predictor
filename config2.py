@@ -5,16 +5,16 @@ shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
 
-freeze_backbone = True
+freeze_backbone = False
 
 # Data Paths
 train_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_train_with_rotation/scene{01..34}.tar"
 val_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_val_with_info/val_scene{1..2}.tar"
-# models_root = "/media/ssd2/peter/datasets/housecat6d/obj_models_ply_5000"
+models_root = "/media/ssd2/peter/datasets/obj_models_ply_5000"
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights"
-val_img_dir = "./val_img"
+weight_dir = "./weights_with_rot"
+val_img_dir = "./val_img_with_rot"
 
 # Input Data Settings
 size = 128
@@ -33,7 +33,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = False
+augmentation = True
 
 # Visualization Settings
 num_imgs_log = 8
