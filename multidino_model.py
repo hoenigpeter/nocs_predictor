@@ -103,7 +103,7 @@ class DPT(DPTPreTrainedModel):
 
         self.dpt = DPTModel(config, add_pooling_layer=False)
         self.neck = DPTNeck(config)
-        
+
         print(self.config.neck_hidden_sizes)
         # self.config.neck_hidden_sizes = [96, 192, 384, 768]
 
@@ -245,7 +245,7 @@ class MultiDINO(nn.Module):
         self.num_blocks = 1
         self.freeze_backbone = freeze_backbone
 
-        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage2", "stage4", "stage8", "stage12"], reshape_hidden_states=False)
+        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage2", "stage5", "stage8", "stage11"], reshape_hidden_states=False)
         config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
 
         self.dpt = DPT(config, self.freeze_backbone)

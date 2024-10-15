@@ -33,7 +33,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = True
+augmentation = False
 
 # Visualization Settings
 num_imgs_log = 8
