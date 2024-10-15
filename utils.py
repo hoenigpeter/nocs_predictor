@@ -111,31 +111,31 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False):
 
     if augment:
         prob = 0.8
-        # seq_syn = iaa.Sequential([
-        #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
-        #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-        #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-        #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-        #                             ], random_order = False)
-
         seq_syn = iaa.Sequential([
                                     iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-                                    iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
                                     iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
                                     iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-                                    iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
                                     iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
                                     ], random_order = True)
+
+        # seq_syn = iaa.Sequential([
+        #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
+        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
+        #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+        #                             iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
+        #                             ], random_order = True)
 
         # seq_syn = iaa.Sequential([        
         #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),

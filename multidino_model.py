@@ -5,6 +5,7 @@ import torch.nn.functional as F
 from transformers import ViTModel, Dinov2Model, Dinov2Config, DPTConfig, DPTModel, DPTPreTrainedModel
 from transformers.models.dpt.modeling_dpt import DPTNeck
 from transformers.utils.backbone_utils import load_backbone 
+from sklearn.decomposition import PCA
 
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model, max_len=768, device='cuda:0'):
@@ -89,17 +90,21 @@ class DPT(DPTPreTrainedModel):
         self.backbone = None
         if config.is_hybrid is False and (config.backbone_config is not None or config.backbone is not None):
             self.backbone = load_backbone(config)
+
+            for param in self.backbone.parameters():
+                if freeze_backbone == True:
+                    param.requires_grad = False
+                print(param.requires_grad)
+
         else:
             self.dpt = DPTModel(config, add_pooling_layer=False)
-
         
-        for param in self.backbone.parameters():
-            if freeze_backbone == True:
-                param.requires_grad = False
-            print(param.requires_grad)
+        print(self.backbone.stage_names)
 
         self.dpt = DPTModel(config, add_pooling_layer=False)
         self.neck = DPTNeck(config)
+        
+        print(self.config.neck_hidden_sizes)
         # self.config.neck_hidden_sizes = [96, 192, 384, 768]
 
         self.post_init()
@@ -125,30 +130,30 @@ class DPT(DPTPreTrainedModel):
             )
             hidden_states = outputs.feature_maps
 
-        else:
-            outputs = self.dpt(
-                pixel_values,
-                head_mask=head_mask,
-                output_attentions=output_attentions,
-                output_hidden_states=True,
-                return_dict=return_dict,
-            )
+        # else:
+        #     outputs = self.dpt(
+        #         pixel_values,
+        #         head_mask=head_mask,
+        #         output_attentions=output_attentions,
+        #         output_hidden_states=True,
+        #         return_dict=return_dict,
+        #     )
 
-            hidden_states = outputs.hidden_states if return_dict else outputs[1]
+        #     hidden_states = outputs.hidden_states if return_dict else outputs[1]
 
-            if not self.config.is_hybrid:
-                hidden_states = [
-                    feature for idx, feature in enumerate(hidden_states[1:]) if idx in self.config.backbone_out_indices
-                ]
-            else:
-                backbone_hidden_states = outputs.intermediate_activations if return_dict else list(outputs[-1])
-                backbone_hidden_states.extend(
-                    feature
-                    for idx, feature in enumerate(hidden_states[1:])
-                    if idx in self.config.backbone_out_indices[2:]
-                )
+        #     if not self.config.is_hybrid:
+        #         hidden_states = [
+        #             feature for idx, feature in enumerate(hidden_states[1:]) if idx in self.config.backbone_out_indices
+        #         ]
+        #     else:
+        #         backbone_hidden_states = outputs.intermediate_activations if return_dict else list(outputs[-1])
+        #         backbone_hidden_states.extend(
+        #             feature
+        #             for idx, feature in enumerate(hidden_states[1:])
+        #             if idx in self.config.backbone_out_indices[2:]
+        #         )
 
-                hidden_states = backbone_hidden_states
+        #         hidden_states = backbone_hidden_states
 
         patch_height, patch_width = None, None
         if self.config.backbone_config is not None and self.config.is_hybrid is False:
@@ -240,12 +245,12 @@ class MultiDINO(nn.Module):
         self.num_blocks = 1
         self.freeze_backbone = freeze_backbone
 
-        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage1", "stage2", "stage3", "stage4"], reshape_hidden_states=False)
+        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage2", "stage4", "stage8", "stage12"], reshape_hidden_states=False)
         config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
 
         self.dpt = DPT(config, self.freeze_backbone)
 
-        self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=256, nhead=self.nhead, patch_size=16)
+        #self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=256, nhead=self.nhead, patch_size=16)
 
         #self.geometry_head = UNetGeometryHead()
 
@@ -318,6 +323,7 @@ class MultiDINO(nn.Module):
             return_dict=False,
         )
 
+        #outputs = F.interpolate(outputs, size=(128, 128), mode='bilinear', align_corners=True)
         #outputs = self.geometry_head(outputs) 
 
         # mask = self.mask_head(outputs)

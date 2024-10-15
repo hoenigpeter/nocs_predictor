@@ -19,6 +19,8 @@ from multidino_model import MultiDINO as multidino
 from transformers import CLIPProcessor, CLIPModel
 import open3d as o3d
 
+from sklearn.decomposition import PCA
+
 import json
 import webdataset as wds
 
@@ -390,7 +392,7 @@ def main(config):
                 regression_nocs_loss = F.mse_loss(nocs_estimated, nocs_images_normalized_gt)
 
                 # LOSSES Summation
-                loss = 1.0 * binary_nocs_loss + 0 * regression_nocs_loss + 1 * rot_loss
+                loss = 1.0 * binary_nocs_loss + 0 * regression_nocs_loss + 1.0 * rot_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 
