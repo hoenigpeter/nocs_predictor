@@ -102,7 +102,13 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False):
         crop_ymin = (h - original_size) // 2
         crop_ymax = crop_ymin + original_size
 
-        # Crop the image to the original size
+        # Add 5 pixels of padding around the crop
+        crop_xmin = max(crop_xmin - 5, 0)  # Ensure xmin doesn't go below 0
+        crop_xmax = min(crop_xmax + 5, w)  # Ensure xmax doesn't exceed image width
+        crop_ymin = max(crop_ymin - 5, 0)  # Ensure ymin doesn't go below 0
+        crop_ymax = min(crop_ymax + 5, h)  # Ensure ymax doesn't exceed image height
+
+        # Crop the image to the original size with padding
         img_array = img_array[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
     else:
         # Default center crop
