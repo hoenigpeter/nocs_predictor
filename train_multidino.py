@@ -126,7 +126,6 @@ def main(config):
         running_regression_nocs_loss = 0.0 
         running_masked_nocs_loss = 0.0 
         running_seg_loss = 0.0 
-        running_rot_loss = 0.0 
 
         generator.train()
 
@@ -177,8 +176,6 @@ def main(config):
             x_logits, y_logits, z_logits, masks_estimated = generator(rgb_images_gt)
 
             # LOSSES
-            # 1.) Rotation loss - from R to quat
-
             # 2.) Mask loss
             binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
 

@@ -198,7 +198,6 @@ class Autoencoder(nn.Module):
         
         # Using the last hidden state for bottleneck
         f4 = hidden_states[-1]  # Last hidden state      
-        print("f4 shape: ", f4.shape)
         f4 = f4.view(f4.size(0), -1)
         x = self.bottleneck(f4)
 

@@ -19,6 +19,7 @@ val_img_dir = "./val_img"
 # Input Data Settings
 size = 128
 num_bins = 50
+num_labels = 10
 
 # Optimizer Settings
 lr = 1e-4
@@ -33,7 +34,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = False
+augmentation = True
 
 # Visualization Settings
 num_imgs_log = 8
