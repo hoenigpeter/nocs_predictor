@@ -18,11 +18,12 @@ from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_matrix
 from multidino_model import MultiDINO as multidino
 from transformers import CLIPProcessor, CLIPModel
 import open3d as o3d
+from torch.optim.lr_scheduler import CosineAnnealingLR
 
 import json
 import webdataset as wds
 
-from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, preload_pointclouds
+from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, create_webdataset, create_webdataset_val, custom_collate_fn, make_log_dirs, plot_progress_imgs, preload_pointclouds
 
 import argparse
 import importlib.util
@@ -78,38 +79,40 @@ def main(config):
     generator.to(device)
 
     # Optimizer instantiation
-    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
-    #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
+    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
+    scheduler_generator = CosineAnnealingLR(optimizer_generator, T_max=30, eta_min=0)
+
 
     # Instantiate train and val dataset + dataloaders
-    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation)
-    val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False)
+    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=False, class_name="bottle")
+    val_dataset = create_webdataset_val(config.val_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=2)
 
-    # train_dataloader = wds.WebLoader(
-    #     train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
-    # )
-    # val_dataloader = wds.WebLoader(
-    #         val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
-    # )
-
-    train_dataloader = DataLoader(
-        train_dataset, 
-        batch_size=config.batch_size, 
-        shuffle=True,  # Shuffle should typically be True for training
-        num_workers=config.train_num_workers, 
-        drop_last=True, 
-        collate_fn=custom_collate_fn
+    train_dataloader = wds.WebLoader(
+        train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
+    )
+    val_dataloader = wds.WebLoader(
+            val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
 
-    # Validation DataLoader
-    val_dataloader = DataLoader(
-        val_dataset, 
-        batch_size=config.batch_size, 
-        shuffle=False,  # Shuffle should be False for validation
-        num_workers=config.val_num_workers, 
-        drop_last=True, 
-        collate_fn=custom_collate_fn
-    )
+    # train_dataloader = DataLoader(
+    #     train_dataset, 
+    #     batch_size=config.batch_size, 
+    #     shuffle=True,  # Shuffle should typically be True for training
+    #     num_workers=config.train_num_workers, 
+    #     drop_last=True, 
+    #     collate_fn=custom_collate_fn
+    # )
+
+    # # Validation DataLoader
+    # val_dataloader = DataLoader(
+    #     val_dataset, 
+    #     batch_size=config.batch_size, 
+    #     shuffle=True,  # Shuffle should be False for validation
+    #     num_workers=config.val_num_workers, 
+    #     drop_last=True, 
+    #     collate_fn=custom_collate_fn
+    # )
 
     # pointclouds = preload_pointclouds(config.models_root)
 
@@ -130,8 +133,8 @@ def main(config):
         generator.train()
 
         # # Shuffle before epoch
-        # train_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
-        # val_dataloader.unbatched().shuffle(10000).batched(config.batch_size)
+        train_dataloader.unbatched().shuffle(1000).batched(config.batch_size)
+        val_dataloader.unbatched().shuffle(1000).batched(config.batch_size)
        
         for step, batch in enumerate(train_dataloader):
             start_time_iteration = time.time()
@@ -158,6 +161,11 @@ def main(config):
             rgb_images = rgb_images.permute(0, 3, 1, 2)
             rgb_images_gt = rgb_images.to(device)
 
+            # Normalize mask to be binary (0 or 1)
+            binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
+            binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
+            rgb_images_gt = rgb_images_gt * binary_mask
+            
             # MASK processing
             mask_images_gt = mask_images.float() / 255.0
             mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
@@ -268,7 +276,7 @@ def main(config):
                 running_seg_loss = 0
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
-                plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_gt)
+                plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, binary_masks, rotation_gt)
 
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
@@ -298,6 +306,11 @@ def main(config):
                 rgb_images = (rgb_images.float() / 127.5) - 1
                 rgb_images = rgb_images.permute(0, 3, 1, 2)
                 rgb_images_gt = rgb_images.to(device)
+
+                # Normalize mask to be binary (0 or 1)
+                binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
+                binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
+                rgb_images_gt = rgb_images_gt * binary_mask
 
                 # MASK processing
                 mask_images_gt = mask_images.float() / 255.0
@@ -396,7 +409,7 @@ def main(config):
         print("Val Loss: {:.4f}".format(avg_loss))
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
-        plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks, rotation_gt)
+        plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, binary_masks, rotation_gt)
 
         if epoch % config.save_epoch_interval == 0:
             torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
@@ -405,6 +418,7 @@ def main(config):
         with open("loss_log.json", "w") as f:
             json.dump(loss_log, f, indent=4)
 
+        scheduler_generator.step()
         epoch += 1
         iteration = 0   
 

@@ -179,3 +179,6 @@ cython_debug/
 /val_img_with_aug
 /weights_rot
 /weights_with_aug
+
+/val_img_megapose
+/weights_megapose

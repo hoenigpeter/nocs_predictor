@@ -274,27 +274,27 @@ class MultiDINO(nn.Module):
         # NOCS head
        # Learning spatial relationships for x, y, z
         self.x_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
-            nn.Dropout(0.1, False),
-            nn.Conv2d(256, self.num_bins, kernel_size=1),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
         )
 
         self.y_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
-            nn.Dropout(0.1, False),
-            nn.Conv2d(256, self.num_bins, kernel_size=1),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
         )
         
         self.z_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(256),
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
-            nn.Dropout(0.1, False),
-            nn.Conv2d(256, self.num_bins, kernel_size=1),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
         )
 
         self.mask_head = nn.Sequential(
@@ -306,16 +306,16 @@ class MultiDINO(nn.Module):
             nn.Sigmoid()
         )
 
-        self.cls_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Dropout(0.1, False),
-            nn.Conv2d(256, 256, kernel_size=1),  # Intermediate conv layer
-            nn.AdaptiveAvgPool2d((1, 1)),        # Global Average Pooling to reduce to [batch_size, 256, 1, 1]
-            nn.Flatten(),                        # Flatten the output to [batch_size, 256]
-            nn.Linear(256, self.num_labels)       # Fully connected layer for classification
-        )
+        # self.cls_head = nn.Sequential(
+        #     nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1, False),
+        #     nn.Conv2d(256, 256, kernel_size=1),  # Intermediate conv layer
+        #     nn.AdaptiveAvgPool2d((1, 1)),        # Global Average Pooling to reduce to [batch_size, 256, 1, 1]
+        #     nn.Flatten(),                        # Flatten the output to [batch_size, 256]
+        #     nn.Linear(256, self.num_labels)       # Fully connected layer for classification
+        # )
 
         # # Rotation head
         # self.rotation_head = nn.Sequential(
@@ -355,19 +355,19 @@ class MultiDINO(nn.Module):
         x_logits = self.x_head(outputs)  # Shape: [batch_size, 256, 128, 128]
         y_logits = self.y_head(outputs)  # Shape: [batch_size, 256, 128, 128]
         z_logits = self.z_head(outputs)  # Shape: [batch_size, 256, 128, 128]
-        cls_logits = self.cls_head(outputs)
+        #cls_logits = self.cls_head(outputs)
         
         # Concatenate NOCS logits along the channel dimension
         # nocs_logits = torch.cat((x_logits, y_logits, z_logits), dim=1)
 
-        quaternions = self.rotation_head(outputs)
+        #quaternions = self.rotation_head(outputs)
         masks = self.mask_head(outputs)
         #rotation = self.rotation_head(outputs)
 
         #batch_size = nocs_logits.size(0)
         #nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
 
-        return x_logits, y_logits, z_logits, cls_logits, masks
+        return x_logits, y_logits, z_logits, masks
     
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):

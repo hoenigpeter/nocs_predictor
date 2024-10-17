@@ -128,7 +128,6 @@ def main(config):
         running_regression_nocs_loss = 0.0 
         running_masked_nocs_loss = 0.0 
         running_seg_loss = 0.0 
-        running_cls_loss = 0.0
         running_rot_loss = 0.0 
 
         generator.train()
@@ -157,22 +156,16 @@ def main(config):
             infos = batch['info']
 
             pcs = []
-            cls_gt = []
             for entry in infos:
                 obj_name = entry["obj_name"]
                 obj_cat = entry["category_id"]
                 
                 gt_points = pointclouds[(str(obj_cat), obj_name)]
                 pcs.append(gt_points)
-                cls_gt.append(obj_cat-1)
 
             pcs_np = np.array(pcs)
             pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
             pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
-
-            cls_gt = np.array(cls_gt)
-            cls_gt = torch.tensor(cls_gt, dtype=torch.long)
-            cls_gt = cls_gt.to(device)  # 16, 10000, 3
 
             # Normalize mask to be binary (0 or 1)
             binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
@@ -202,7 +195,7 @@ def main(config):
             rotation_gt = torch.stack(rotations).to(device)
 
             # forward pass through generator
-            x_logits, y_logits, z_logits, cls_logits, quaternion_estimated = generator(rgb_images_masked)
+            x_logits, y_logits, z_logits, quaternion_estimated = generator(rgb_images_masked)
 
             # LOSSES
             # 1.) Rotation loss - from R to quat
@@ -244,10 +237,9 @@ def main(config):
 
             # Calculate the L1 regression loss between the estimated NOCS map and ground truth
             regression_nocs_loss = F.mse_loss(nocs_estimated, nocs_images_normalized_gt)
-            cls_loss = F.cross_entropy(cls_logits, cls_gt)
 
             # LOSSES Summation
-            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * cls_loss + 0 * rot_loss
+            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 0 * rot_loss
 
             # Loss backpropagation
             optimizer_generator.zero_grad()
@@ -260,7 +252,6 @@ def main(config):
             running_binary_nocs_loss += binary_nocs_loss.item()
             running_regression_nocs_loss += regression_nocs_loss.item()
             running_rot_loss += rot_loss.item()
-            running_cls_loss += cls_loss.item()
 
             running_loss += loss.item()
             iteration += 1
@@ -269,13 +260,12 @@ def main(config):
                 avg_loss = running_loss / 100
                 avg_running_binary_nocs_loss = running_binary_nocs_loss / 100
                 avg_running_regression_nocs_loss = running_regression_nocs_loss / 100
-                avg_running_cls_loss = running_cls_loss / 100
                 avg_running_rot_loss = running_rot_loss / 100
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, CLS Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
-                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, avg_running_cls_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
+                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
+                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
@@ -283,7 +273,6 @@ def main(config):
                     "iteration": iteration,
                     "binary_nocs_loss": avg_running_binary_nocs_loss,
                     "regression_nocs_loss": avg_running_regression_nocs_loss,
-                    "cls_loss": avg_running_cls_loss,
                     "rot_loss": avg_running_rot_loss,
                     "learning_rate": lr_current,
                     "time_per_100_iterations": elapsed_time_iteration
@@ -292,7 +281,6 @@ def main(config):
                 running_loss = 0
                 running_binary_nocs_loss = 0
                 running_regression_nocs_loss = 0
-                running_cls_loss = 0
                 running_rot_loss = 0
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
@@ -305,7 +293,6 @@ def main(config):
         running_loss = 0.0
         running_binary_nocs_loss = 0
         running_regression_nocs_loss = 0
-        running_cls_loss = 0
         running_rot_loss = 0
 
         val_iter = 0
@@ -322,22 +309,16 @@ def main(config):
                 infos = batch['info']
 
                 pcs = []
-                cls_gt = []
                 for entry in infos:
-                    obj_name = entry["obj_name"]
+                    #obj_name = entry["obj_name"]
                     obj_cat = entry["category_id"]
                     
-                    gt_points = pointclouds[(str(obj_cat), obj_name)]
+                    #gt_points = pointclouds[(str(obj_cat), obj_name)]
                     pcs.append(gt_points)
-                    cls_gt.append(obj_cat - 1)
 
-                pcs_np = np.array(pcs)
-                pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
-                pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
-
-                cls_gt = np.array(cls_gt)
-                cls_gt = torch.tensor(cls_gt, dtype=torch.long)
-                cls_gt = cls_gt.to(device)  # 16, 10000, 3
+                # pcs_np = np.array(pcs)
+                # pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+                # pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
 
                 # Normalize mask to be binary (0 or 1)
                 binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
@@ -367,7 +348,7 @@ def main(config):
                 rotation_gt = torch.stack(rotations).to(device)
 
                 # forward pass through generator
-                x_logits, y_logits, z_logits, cls_logits, quaternion_estimated = generator(rgb_images_masked)
+                x_logits, y_logits, z_logits, quaternion_estimated = generator(rgb_images_masked)
 
                 # LOSSES
                 # 1.) Rotation loss - from R to quat
@@ -410,10 +391,8 @@ def main(config):
                 # Calculate the L1 regression loss between the estimated NOCS map and ground truth
                 regression_nocs_loss = F.mse_loss(nocs_estimated, nocs_images_normalized_gt)
 
-                cls_loss = F.cross_entropy(cls_logits, cls_gt)
-
                 # LOSSES Summation
-                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * cls_loss + 1.0 * rot_loss
+                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * rot_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 
@@ -428,7 +407,6 @@ def main(config):
         avg_loss = running_loss / val_iter
         avg_running_binary_nocs_loss = running_binary_nocs_loss / val_iter
         avg_running_regression_nocs_loss = running_regression_nocs_loss / val_iter
-        avg_running_cls_loss = running_cls_loss / val_iter
         avg_running_rot_loss = running_rot_loss / val_iter
         
         loss_log.append({
@@ -436,7 +414,6 @@ def main(config):
             "val_binary_nocs_loss": avg_running_binary_nocs_loss,
             "val_regression_nocs_loss": avg_running_regression_nocs_loss,
             "val_rot_loss": avg_running_rot_loss,
-            "val_cls_loss": avg_running_cls_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })

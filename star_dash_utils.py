@@ -76,38 +76,19 @@ class WebDatasetWrapper(Dataset):
         # Retrieve an item by index
         return self.data[idx]
 
-def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False, class_name=None):
-
+def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False):
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode("pil") \
         .shuffle(shuffle_buffer, initial=size) \
         .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
-        .map_tuple( 
-            lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
-            lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), 
-            lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop), 
-            lambda info: info) \
-        .select(lambda sample: (class_name is None) or (sample[3].get('category_name') == class_name))  # Ensure all four elements are included
-
-    return dataset
-
-def create_webdataset_val(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False, class_name=None):
+        .map_tuple( lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), \
+                    lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), \
+                    lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop),
+                    lambda info: info)
     
-    dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
-        .decode("pil") \
-        .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
-        .map_tuple( 
-            lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
-            lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), 
-            lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop), 
-            lambda info: info) \
-        .select(lambda sample: (class_name is None) or (sample[3].get('category_id') == class_name))  # Ensure all four elements are included
-
     return dataset
 
 def preprocess(image, size, interpolation, augment=False, center_crop=False):
-
     img_array = np.array(image).astype(np.uint8)
     h, w = img_array.shape[0], img_array.shape[1]
 
@@ -187,22 +168,46 @@ def setup_environment(gpu_id):
         gpu_id = ''
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
-def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, mask_images_binary, mask_images_gt, rot_estimated_R):
+def normalize_to_0_1(data):
+    """
+    Normalize data to the range [0, 1].
+    Args:
+    - data: Input tensor or numpy array.
+    
+    Returns:
+    - normalized_data: Normalized tensor in range [0, 1].
+    """
+    min_val = data.min()
+    max_val = data.max()
+    normalized_data = (data - min_val) / (max_val - min_val)
+    return normalized_data
 
+def normalize_to_0_1(data):
+    """
+    Normalize data to the range [0, 1].
+    Args:
+    - data: Input tensor (torch.Tensor).
+    
+    Returns:
+    - normalized_data: Normalized tensor in range [0, 1].
+    """
+    min_val = data.min()
+    max_val = data.max()
+    
+    # Avoid division by zero
+    if max_val - min_val > 0:
+        normalized_data = (data - min_val) / (max_val - min_val)
+    else:
+        normalized_data = torch.zeros_like(data)  # If all values are the same, return zero tensor
 
-    # Print value ranges for each input
-    # print(f"RGB Images - Min: {torch.min(rgb_images):.4f}, Max: {torch.max(rgb_images):.4f}")
-    # print(f"NOCS GT - Min: {torch.min(nocs_images_normalized_gt):.4f}, Max: {torch.max(nocs_images_normalized_gt):.4f}")
-    # print(f"NOCS Estimated - Min: {torch.min(nocs_estimated):.4f}, Max: {torch.max(nocs_estimated):.4f}")
-    # print(f"Mask Images - Min: {torch.min(mask_images):.4f}, Max: {torch.max(mask_images):.4f}")
-    # print(f"Binary Mask Images - Min: {torch.min(mask_images_binary):.4f}, Max: {torch.max(mask_images_binary):.4f}")
-    # print(f"Ground Truth Mask Images - Min: {torch.min(mask_images_gt):.4f}, Max: {torch.max(mask_images_gt):.4f}")
+    return normalized_data
 
-    # print()
-    _,ax = plt.subplots(config.num_imgs_log,6,figsize=(10,20))
-    # rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks
+def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, star_output, dash_output, rot_estimated_R):
+    
+    _,ax = plt.subplots(config.num_imgs_log,5,figsize=(10,20))
+
     # Define column titles
-    col_titles = ['RGB Image', 'NOCS GT', 'NOCS Estimated', 'Mask GT', 'Mask Estimated', 'Mask Binary Estimated']
+    col_titles = ['RGB Image', 'NOCS GT', 'NOCS Estimated', 'STAR Estimated', 'DASH Estimated']
     
     # Add column titles
     for i, title in enumerate(col_titles):
@@ -212,38 +217,37 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
         ax[i, 0].imshow(((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 1].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 2].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 3].imshow(((mask_images[i])).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 4].imshow(((mask_images_binary[i])).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 5].imshow(((mask_images_gt[i])).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 3].imshow((normalize_to_0_1(star_output[i]).detach().cpu().numpy().transpose(1, 2, 0)))
+        ax[i, 4].imshow((normalize_to_0_1(dash_output[i]).detach().cpu().numpy().transpose(1, 2, 0)))
 
-        # # Plot rotation arrows
-        # rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
+        # Plot rotation arrows
+        rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
 
-        # # Define arrow directions for x, y, z axes
-        # arrow_directions = {
-        #     'x': np.array([1, 0, 0]),  # X-axis direction
-        #     'y': np.array([0, 1, 0]),  # Y-axis direction
-        #     'z': np.array([0, 0, 1])   # Z-axis direction
-        # }
+        # Define arrow directions for x, y, z axes
+        arrow_directions = {
+            'x': np.array([1, 0, 0]),  # X-axis direction
+            'y': np.array([0, 1, 0]),  # Y-axis direction
+            'z': np.array([0, 0, 1])   # Z-axis direction
+        }
 
-        # # Get the start point (e.g., center of the image in normalized coordinates)
-        # start_point = np.array([0.5, 0.5])  # Center of the image
+        # Get the start point (e.g., center of the image in normalized coordinates)
+        start_point = np.array([0.5, 0.5])  # Center of the image
 
-        # # Iterate over each arrow direction and plot
-        # for key, direction in arrow_directions.items():
-        #     # Transform the arrow direction using the rotation matrix
-        #     transformed_arrow = rotation_matrix @ direction
+        # Iterate over each arrow direction and plot
+        for key, direction in arrow_directions.items():
+            # Transform the arrow direction using the rotation matrix
+            transformed_arrow = rotation_matrix @ direction
             
-        #     # Calculate end point based on the transformed arrow
-        #     end_point = start_point + (transformed_arrow[:2] * config.arrow_length)  # Only use x and y for 2D
+            # Calculate end point based on the transformed arrow
+            end_point = start_point + (transformed_arrow[:2] * config.arrow_length)  # Only use x and y for 2D
             
-        #     # Plot the arrow
-        #     ax[i, 0].quiver(
-        #         start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
-        #         (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
-        #         (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
-        #         angles='xy', scale_units='xy', scale=1, color=config.arrow_colors[key], width=config.arrow_width
-        #     )
+            # Plot the arrow
+            ax[i, 0].quiver(
+                start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
+                (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
+                (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
+                angles='xy', scale_units='xy', scale=1, color=config.arrow_colors[key], width=config.arrow_width
+            )
 
     plt.tight_layout()
     plt.savefig(imgfn, dpi=300)
