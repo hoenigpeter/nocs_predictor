@@ -87,21 +87,6 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
             lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), 
             lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop), 
             lambda info: info) \
-        .select(lambda sample: (class_name is None) or (sample[3].get('category_name') == class_name))  # Ensure all four elements are included
-
-    return dataset
-
-def create_webdataset_val(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False, class_name=None):
-    
-    dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
-        .decode("pil") \
-        .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
-        .map_tuple( 
-            lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
-            lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), 
-            lambda nocs: preprocess(nocs, size, Image.NEAREST, center_crop=center_crop), 
-            lambda info: info) \
         .select(lambda sample: (class_name is None) or (sample[3].get('category_id') == class_name))  # Ensure all four elements are included
 
     return dataset
@@ -136,31 +121,31 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False):
 
     if augment:
         prob = 0.8
-        seq_syn = iaa.Sequential([
-                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
-                                    iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-                                    iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-                                    iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-                                    ], random_order = True)
-
         # seq_syn = iaa.Sequential([
         #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
-        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-        #                             iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
         #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
         #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
         #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
         #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-        #                             iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
-        #                             iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
         #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
         #                             ], random_order = True)
+
+        seq_syn = iaa.Sequential([
+                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
+                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+                                    iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+                                    iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
+                                    iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
+                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+                                    iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
+                                    iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
+                                    iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
+                                    ], random_order = True)
 
         # seq_syn = iaa.Sequential([        
         #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
@@ -247,4 +232,20 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
 
     plt.tight_layout()
     plt.savefig(imgfn, dpi=300)
+    plt.close()
+
+def plot_single_image(output_dir, iteration, nocs_estimated):
+
+    # Ensure the output directory exists
+    os.makedirs(output_dir, exist_ok=True)
+    
+    # Prepare filename with padded iteration (e.g., 00000001.png)
+    imgfn = os.path.join(output_dir, f'{iteration:08d}.png')
+
+    # Plot NOCS estimated map (scale to 0-1 for visualization)
+    plt.imshow(((nocs_estimated[0] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+    plt.axis('off')  # Turn off axis for cleaner output
+
+    # Save the figure
+    plt.savefig(imgfn, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()

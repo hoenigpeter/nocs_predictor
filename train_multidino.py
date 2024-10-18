@@ -23,7 +23,9 @@ from torch.optim.lr_scheduler import CosineAnnealingLR
 import json
 import webdataset as wds
 
-from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, create_webdataset, create_webdataset_val, custom_collate_fn, make_log_dirs, plot_progress_imgs, preload_pointclouds
+from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
+                    create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, \
+                    preload_pointclouds, plot_single_image
 
 import argparse
 import importlib.util
@@ -81,12 +83,10 @@ def main(config):
     # Optimizer instantiation
     #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
     optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
-    scheduler_generator = CosineAnnealingLR(optimizer_generator, T_max=30, eta_min=0)
-
 
     # Instantiate train and val dataset + dataloaders
-    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=False, class_name="bottle")
-    val_dataset = create_webdataset_val(config.val_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=2)
+    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
+    val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=config.center_crop, class_name=config.class_name)
 
     train_dataloader = wds.WebLoader(
         train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
@@ -412,13 +412,13 @@ def main(config):
         plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, binary_masks, rotation_gt)
 
         if epoch % config.save_epoch_interval == 0:
-            torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
+            # Save the entire model
+            torch.save(generator, os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
+            #torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
 
         # Save loss log to JSON after each epoch
-        with open("loss_log.json", "w") as f:
+        with open(config.weight_dir + "/loss_log.json", "w") as f:
             json.dump(loss_log, f, indent=4)
-
-        scheduler_generator.step()
         epoch += 1
         iteration = 0   
 

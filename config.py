@@ -1,6 +1,7 @@
 # General Training Settings
-max_epochs = 300
+max_epochs = 100
 batch_size = 16
+test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
@@ -8,13 +9,17 @@ gpu_id = 0
 freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/megapose_nocs_10cat/{00000000..00000140}.tar"
-val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
-models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
+val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
+test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
+#models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+
+class_name = 2
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_megapose"
-val_img_dir = "./val_img_megapose"
+weight_dir = "./weights_bottle"
+val_img_dir = "./val_img_bottle"
+test_img_dir = "./test_img_bottle"
 
 # Input Data Settings
 size = 128
@@ -32,7 +37,8 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = False
+augmentation = True
+center_crop = False
 
 # Visualization Settings
 num_imgs_log = 8
