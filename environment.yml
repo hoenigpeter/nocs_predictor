@@ -9,12 +9,11 @@ dependencies:
   - pillow
   - torch==2.4.0
   - torchvision==0.19.0
-  - cudatoolkit=11.3
-  - pytorch3d
+  - pytorch3d==0.7.7
   - transformers==4.45.2
   - imgaug==0.4.0
   - tqdm
   - tensorboard
   - pip
   - pip:
-      - webdataset
+      - webdataset==0.2.100

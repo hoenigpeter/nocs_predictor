@@ -81,7 +81,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode("pil") \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
+        .to_tuple("rgb.png", "visib_mask.png", "nocs.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(rgb, size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
             lambda mask: preprocess(mask, size, Image.NEAREST, center_crop=center_crop), 
