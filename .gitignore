@@ -189,3 +189,7 @@ val_img_bottle/
 val_img_megapose_bottle/
 weights_bottle/
 weights_megapose_bottle/
+
+housecat_v1
+_val_img_megapose_bottle
+_weights_megapose_bottle

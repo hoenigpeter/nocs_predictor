@@ -15,7 +15,7 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import pytorch3d
 from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_matrix
-from multidino_model import MultiDINO as multidino
+from multidino_model import MultiDINORot as multidino
 from transformers import CLIPProcessor, CLIPModel
 import open3d as o3d
 
@@ -76,16 +76,16 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = multidino(input_resolution=config.size, num_bins=config.num_bins, num_labels=config.num_labels, freeze_backbone=config.freeze_backbone)
+    generator = multidino(input_resolution=config.size, num_bins=config.num_bins, freeze_backbone=config.freeze_backbone)
     generator.to(device)
 
     # Optimizer instantiation
-    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
+    optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
     #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, weight_decay=config.weight_decay)
 
     # Instantiate train and val dataset + dataloaders
-    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation)
-    val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False)
+    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
+    val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=config.center_crop, class_name=config.class_name)
 
     train_dataloader = wds.WebLoader(
         train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
@@ -124,8 +124,7 @@ def main(config):
 
         start_time_epoch = time.time()
         running_loss = 0.0 
-        running_binary_nocs_loss = 0.0 
-        running_regression_nocs_loss = 0.0 
+        running_background_loss = 0.0 
         running_masked_nocs_loss = 0.0 
         running_seg_loss = 0.0 
         running_rot_loss = 0.0 
@@ -167,19 +166,17 @@ def main(config):
             pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
             pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
 
+            # RGB processing
+            rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
+            rgb_images = (rgb_images.float() / 127.5) - 1
+            rgb_images = rgb_images.permute(0, 3, 1, 2)
+            rgb_images_gt = rgb_images.to(device)
+
             # Normalize mask to be binary (0 or 1)
             binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
-            rgb_images_masked = rgb_images.permute(0, 3, 1, 2).float()  # Convert to float to prevent data type issues
-            binary_mask = binary_mask.permute(0, 3, 1, 2)  # Make sure mask has same shape
-            rgb_images_masked = rgb_images_masked * binary_mask
-            rgb_images_masked = rgb_images_masked.permute(0, 2, 3, 1)
-
-            # RGB processing
-            rgb_images_masked = torch.clamp(rgb_images_masked.float(), min=0.0, max=255.0)
-            rgb_images_masked = (rgb_images_masked.float() / 127.5) - 1
-            rgb_images_masked = rgb_images_masked.permute(0, 3, 1, 2)
-            rgb_images_masked = rgb_images_masked.to(device)
-
+            binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
+            rgb_images_gt = rgb_images_gt * binary_mask
+            
             # MASK processing
             mask_images_gt = mask_images.float() / 255.0
             mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
@@ -195,29 +192,22 @@ def main(config):
             rotation_gt = torch.stack(rotations).to(device)
 
             # forward pass through generator
-            x_logits, y_logits, z_logits, quaternion_estimated = generator(rgb_images_masked)
+            x_logits, y_logits, z_logits, masks_estimated, rotation_est = generator(rgb_images_gt)
 
             # LOSSES
-            # 1.) Rotation loss - from R to quat
-            quaternion_est_normalized = normalize_quaternion(quaternion_estimated)
-            rotation_est = quaternion_to_matrix(quaternion_est_normalized)
-
+            # 1.) Rotation loss - from R to quat   
             gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)  # Shape: (batch_size, 1000, 3)
             est_points_transformed = apply_rotation(pcs_gt, rotation_est)  # Shape: (batch_size, 1000, 3)
 
             #rot_loss = F.l1_loss(quaternion_est_normalized, quaternion_rotation_gt)
             rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
+            #rot_loss = F.l1_loss(rotation_est, rotation_gt)
 
             # 3.) NOCS Logits loss
-            scaled_nocs = (nocs_images_normalized_gt + 1) * (config.num_bins - 1) / 2.0
-            target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
-            
-            binary_nocs_loss = 0
-            binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
-            binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
-            binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
+            # scaled_nocs = (nocs_images_normalized_gt + 1) * (config.num_bins - 1) / 2.0
+            # target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
 
-            # 3.) NOCS Regression loss for each dimension
+            seg_loss = F.mse_loss(masks_estimated, mask_images_gt[:, 0, :, :].unsqueeze(1))
 
             # Softmax over the bin dimension for x, y, z logits
             x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
@@ -235,11 +225,13 @@ def main(config):
             # Combine the estimated NOCS map from x, y, and z dimensions
             nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
-            # Calculate the L1 regression loss between the estimated NOCS map and ground truth
-            regression_nocs_loss = F.mse_loss(nocs_estimated, nocs_images_normalized_gt)
+            # 4.) NOCS self-supervised loss
+            background_region = (mask_images_gt == 0).float()
+
+            background_loss = F.mse_loss(((nocs_estimated + 1) / 2) * background_region, mask_images_gt * background_region)
 
             # LOSSES Summation
-            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 0 * rot_loss
+            loss = 0.0 * background_loss + 1.0 * rot_loss + 1.0 * seg_loss
 
             # Loss backpropagation
             optimizer_generator.zero_grad()
@@ -249,51 +241,51 @@ def main(config):
             optimizer_generator.step()
             elapsed_time_iteration = time.time() - start_time_iteration
 
-            running_binary_nocs_loss += binary_nocs_loss.item()
-            running_regression_nocs_loss += regression_nocs_loss.item()
+            running_background_loss += background_loss.item()
             running_rot_loss += rot_loss.item()
+            running_seg_loss += seg_loss.item()
 
             running_loss += loss.item()
             iteration += 1
 
             if (step + 1) % 100 == 0:
                 avg_loss = running_loss / 100
-                avg_running_binary_nocs_loss = running_binary_nocs_loss / 100
-                avg_running_regression_nocs_loss = running_regression_nocs_loss / 100
+                avg_running_background_loss = running_background_loss / 100
                 avg_running_rot_loss = running_rot_loss / 100
+                avg_running_seg_loss = running_seg_loss / 100
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
-                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
+                print("Epoch {:02d}, Iteration {:03d}, Loss: {:.4f}, Background Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time per 100 Iterations: {:.4f} seconds".format(
+                    epoch, iteration, avg_loss, avg_running_background_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
                     "epoch": epoch,
                     "iteration": iteration,
-                    "binary_nocs_loss": avg_running_binary_nocs_loss,
-                    "regression_nocs_loss": avg_running_regression_nocs_loss,
+                    "background_loss": avg_running_background_loss,
                     "rot_loss": avg_running_rot_loss,
+                    "seg_loss": avg_running_seg_loss,
                     "learning_rate": lr_current,
                     "time_per_100_iterations": elapsed_time_iteration
                 })
 
                 running_loss = 0
-                running_binary_nocs_loss = 0
-                running_regression_nocs_loss = 0
+                running_background_loss = 0
                 running_rot_loss = 0
+                running_seg_loss = 0
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
-                plot_progress_imgs(imgfn, rgb_images, rgb_images_masked, nocs_images_normalized_gt, nocs_estimated, mask_images, rotation_est)
+                plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, mask_images_gt, rotation_est)
 
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
 
         generator.eval()
         running_loss = 0.0
-        running_binary_nocs_loss = 0
-        running_regression_nocs_loss = 0
+        running_background_loss = 0
         running_rot_loss = 0
+        running_seg_loss = 0
 
         val_iter = 0
         start_time_epoch = time.time()
@@ -316,23 +308,21 @@ def main(config):
                     #gt_points = pointclouds[(str(obj_cat), obj_name)]
                     pcs.append(gt_points)
 
-                # pcs_np = np.array(pcs)
-                # pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
-                # pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
+                pcs_np = np.array(pcs)
+                pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+                pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
+
+                # RGB processing
+                rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
+                rgb_images = (rgb_images.float() / 127.5) - 1
+                rgb_images = rgb_images.permute(0, 3, 1, 2)
+                rgb_images_gt = rgb_images.to(device)
 
                 # Normalize mask to be binary (0 or 1)
                 binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
-                rgb_images_masked = rgb_images.permute(0, 3, 1, 2).float()  # Convert to float to prevent data type issues
-                binary_mask = binary_mask.permute(0, 3, 1, 2)  # Make sure mask has same shape
-                rgb_images_masked = rgb_images_masked * binary_mask
-                rgb_images_masked = rgb_images_masked.permute(0, 2, 3, 1)
-
-                # RGB processing
-                rgb_images_masked = torch.clamp(rgb_images_masked.float(), min=0.0, max=255.0)
-                rgb_images_masked = (rgb_images_masked.float() / 127.5) - 1
-                rgb_images_masked = rgb_images_masked.permute(0, 3, 1, 2)
-                rgb_images_masked = rgb_images_masked.to(device)
-
+                binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
+                rgb_images_gt = rgb_images_gt * binary_mask
+                
                 # MASK processing
                 mask_images_gt = mask_images.float() / 255.0
                 mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
@@ -348,13 +338,10 @@ def main(config):
                 rotation_gt = torch.stack(rotations).to(device)
 
                 # forward pass through generator
-                x_logits, y_logits, z_logits, quaternion_estimated = generator(rgb_images_masked)
+                x_logits, y_logits, z_logits, masks_estimated, rotation_est = generator(rgb_images_gt)
 
                 # LOSSES
                 # 1.) Rotation loss - from R to quat
-                quaternion_est_normalized = normalize_quaternion(quaternion_estimated)
-                rotation_est = quaternion_to_matrix(quaternion_est_normalized)
-
                 gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)  # Shape: (batch_size, 1000, 3)
                 est_points_transformed = apply_rotation(pcs_gt, rotation_est)  # Shape: (batch_size, 1000, 3)
 
@@ -362,16 +349,6 @@ def main(config):
                 rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
 
                 # 3.) NOCS Logits loss
-                scaled_nocs = (nocs_images_normalized_gt + 1) * (config.num_bins - 1) / 2.0
-                target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
-                
-                binary_nocs_loss = 0
-                binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
-                binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
-                binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
-
-                # 3.) NOCS Regression loss for each dimension
-
                 # Softmax over the bin dimension for x, y, z logits
                 x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
                 y_bins = torch.softmax(y_logits, dim=1)
@@ -388,16 +365,18 @@ def main(config):
                 # Combine the estimated NOCS map from x, y, and z dimensions
                 nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
-                # Calculate the L1 regression loss between the estimated NOCS map and ground truth
-                regression_nocs_loss = F.mse_loss(nocs_estimated, nocs_images_normalized_gt)
+                # 4.) NOCS self-supervised loss
+                # 4.) NOCS self-supervised loss
+                background_region = (mask_images_gt == 0).float()
+
+                background_loss = F.mse_loss(((nocs_estimated + 1) / 2) * background_region, mask_images_gt * background_region) * 5
 
                 # LOSSES Summation
-                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * rot_loss
+                loss = 0.0 * background_loss + 1.0 * rot_loss + 1.0 * seg_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 
-                running_binary_nocs_loss += binary_nocs_loss.item()  # Accumulate loss
-                running_regression_nocs_loss += regression_nocs_loss.item()  # Accumulate loss
+                running_background_loss += background_loss.item()  # Accumulate loss
                 running_rot_loss += rot_loss.item()
 
                 running_loss += loss.item()  # Accumulate loss
@@ -405,15 +384,15 @@ def main(config):
                 val_iter+=1
 
         avg_loss = running_loss / val_iter
-        avg_running_binary_nocs_loss = running_binary_nocs_loss / val_iter
-        avg_running_regression_nocs_loss = running_regression_nocs_loss / val_iter
+        avg_running_background_loss = running_background_loss / val_iter
         avg_running_rot_loss = running_rot_loss / val_iter
+        avg_running_seg_loss = running_seg_loss / val_iter
         
         loss_log.append({
             "epoch": epoch,
-            "val_binary_nocs_loss": avg_running_binary_nocs_loss,
-            "val_regression_nocs_loss": avg_running_regression_nocs_loss,
+            "val_background_loss": avg_running_background_loss,
             "val_rot_loss": avg_running_rot_loss,
+            "val_seg_loss": avg_running_seg_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })
@@ -423,17 +402,18 @@ def main(config):
         print("Val Loss: {:.4f}".format(avg_loss))
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
-        plot_progress_imgs(imgfn, rgb_images, rgb_images_masked, nocs_images_normalized_gt, nocs_estimated, mask_images, rotation_est)
-        
+        plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, mask_images_gt, rotation_est)
+
         if epoch % config.save_epoch_interval == 0:
-            torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
+            # Save the entire model
+            torch.save(generator, os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
+            #torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
 
         # Save loss log to JSON after each epoch
-        with open("loss_log.json", "w") as f:
+        with open(config.weight_dir + "/loss_log.json", "w") as f:
             json.dump(loss_log, f, indent=4)
-
         epoch += 1
-        iteration = 0   
+        iteration = 0  
 
 if __name__ == "__main__":
     args = parse_args()

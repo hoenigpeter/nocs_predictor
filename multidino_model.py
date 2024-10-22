@@ -235,7 +235,7 @@ class DPT(DPTPreTrainedModel):
         return hidden_states
 
 class MultiDINO(nn.Module):
-    def __init__(self, input_resolution=256, num_bins=50, num_labels=10, freeze_backbone=False):
+    def __init__(self, input_resolution=256, num_bins=50, freeze_backbone=False):
         super(MultiDINO, self).__init__()
 
         self.nhead = 4
@@ -243,36 +243,13 @@ class MultiDINO(nn.Module):
         self.input_resolution=input_resolution
         self.num_blocks = 1
         self.freeze_backbone = freeze_backbone
-        self.num_labels = num_labels
 
         backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage2", "stage5", "stage8", "stage11"], reshape_hidden_states=False)
         config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
 
         self.dpt = DPT(config, self.freeze_backbone)
 
-        #self.transformer_encoder = TransformerEncoder(num_blocks=self.num_blocks, feature_dim=256, nhead=self.nhead, patch_size=16)
 
-        #self.geometry_head = UNetGeometryHead()
-
-        # self.geometry_head = nn.Sequential(
-        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-        #     nn.Upsample(scale_factor=2, mode='bilinear', align_corners=True),
-        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-        #     nn.ReLU(),
-        # )
-
-        # Mask head
-        # self.mask_head = nn.Sequential(
-        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-        #     nn.ReLU(),
-        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-        #     nn.ReLU(),
-        #     nn.Conv2d(64, 1, kernel_size=3, padding=1),  # Input channels from geometry head
-        #     nn.Sigmoid()
-        # )
-
-        # NOCS head
-       # Learning spatial relationships for x, y, z
         self.x_head = nn.Sequential(
             nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
             nn.ReLU(),
@@ -297,6 +274,14 @@ class MultiDINO(nn.Module):
             nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
         )
 
+        self.rotation_head = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),  # Adjust input channels to 3
+            nn.ReLU(),  # Activation for non-linearity
+            nn.Conv2d(64, 6, kernel_size=3, stride=1, padding=1),  # Output 6 channels for the 6D rotation
+            nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to (batch_size, 6, 1, 1)
+            nn.Flatten()  # Flatten to shape (batch_size, 6)
+        )
+
         self.mask_head = nn.Sequential(
             nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(256),
@@ -306,33 +291,25 @@ class MultiDINO(nn.Module):
             nn.Sigmoid()
         )
 
-        # self.cls_head = nn.Sequential(
-        #     nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-        #     nn.BatchNorm2d(256),
-        #     nn.ReLU(),
-        #     nn.Dropout(0.1, False),
-        #     nn.Conv2d(256, 256, kernel_size=1),  # Intermediate conv layer
-        #     nn.AdaptiveAvgPool2d((1, 1)),        # Global Average Pooling to reduce to [batch_size, 256, 1, 1]
-        #     nn.Flatten(),                        # Flatten the output to [batch_size, 256]
-        #     nn.Linear(256, self.num_labels)       # Fully connected layer for classification
-        # )
+    def rot6d_to_rotmat(self, x):
+        """Convert 6D rotation representation to 3x3 rotation matrix."""
+        x = x.view(-1, 3, 2)  # Reshape into two 3D vectors
+        a1 = x[:, :, 0]  # First 3D vector
+        a2 = x[:, :, 1]  # Second 3D vector
 
-        # # Rotation head
-        # self.rotation_head = nn.Sequential(
-        #     nn.Conv2d(256, 4, kernel_size=1, stride=1, padding=0),
-        #     nn.ReLU(),  # Activation for non-linearity
-        #     nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling
-        #     nn.Flatten()  # Flatten to shape (batch_size, 4)
-        # )
+        # Normalize a1 to get the first basis vector
+        b1 = nn.functional.normalize(a1, dim=1)
 
-        # Rotation head
-        # self.rotation_head = nn.Sequential(
-        #     nn.Conv2d(32, 4, kernel_size=1, stride=1, padding=0),
-        #     nn.ReLU(),  # Activation for non-linearity
-        #     nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling
-        #     nn.Flatten()  # Flatten to shape (batch_size, 4)
-        # )
-       
+        # Make a2 orthogonal to b1
+        b2 = nn.functional.normalize(a2 - (b1 * a2).sum(dim=1, keepdim=True) * b1, dim=1)
+
+        # Compute the third basis vector by taking the cross product
+        b3 = torch.cross(b1, b2, dim=1)
+
+        # Form the rotation matrix
+        rot_mat = torch.stack([b1, b2, b3], dim=-1)  # Shape: (batch_size, 3, 3)
+        return rot_mat
+
     def forward(self, x):
         x_resized = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=True)
         outputs = self.dpt(
@@ -343,32 +320,147 @@ class MultiDINO(nn.Module):
             return_dict=False,
         )
 
-        #outputs = F.interpolate(outputs, size=(128, 128), mode='bilinear', align_corners=True)
-        #outputs = self.geometry_head(outputs) 
+        x_logits = self.x_head(outputs)
+        y_logits = self.y_head(outputs)
+        z_logits = self.z_head(outputs)
+        masks = self.mask_head(outputs)
 
-        # mask = self.mask_head(outputs)
+        x_bins = torch.softmax(x_logits, dim=1)
+        y_bins = torch.softmax(y_logits, dim=1)
+        z_bins = torch.softmax(z_logits, dim=1)
 
-        #nocs_logits = self.nocs_head(outputs)
-        # Apply spatial learning for each NOCS coordinate
+        bin_centers = torch.linspace(-1, 1, self.num_bins).to(x_logits.device)
+
+        nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+        nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+        nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+
+        nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
+
+        masks = self.mask_head(outputs)
+        rotation_6d = self.rotation_head(nocs_estimated)
+        rotation_matrix = self.rot6d_to_rotmat(rotation_6d)
+
+        return x_logits, y_logits, z_logits, masks, rotation_matrix
+
+class MultiDINORot(nn.Module):
+    def __init__(self, input_resolution=256, num_bins=50, num_labels=10, freeze_backbone=False):
+        super(MultiDINORot, self).__init__()
+
+        self.nhead = 4
+        self.num_bins = num_bins
+        self.input_resolution=input_resolution
+        self.num_blocks = 1
+        self.freeze_backbone = freeze_backbone
+        self.num_labels = num_labels
+
+        backbone_config = Dinov2Config.from_pretrained("facebook/dinov2-base", out_features=["stage2", "stage5", "stage8", "stage11"], reshape_hidden_states=False)
+        config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
+
+        self.dpt = DPT(config, self.freeze_backbone)
+
+        # NOCS head
+       # Learning spatial relationships for x, y, z
+        self.geometry_head = nn.Sequential(
+            nn.Conv2d(256, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 128, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(128, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+        )
+
+        self.x_head = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        )
+
+        self.y_head = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        )
+        
+        self.z_head = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        )
+
+        self.mask_head = nn.Sequential(
+            nn.Conv2d(64, 64, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Conv2d(64, 1, kernel_size=1),
+            nn.Sigmoid()
+        )
+
+        # Rotation head
+        self.rotation_head = nn.Sequential(
+            nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),  # Adjust input channels to 3
+            nn.ReLU(),  # Activation for non-linearity
+            nn.Conv2d(64, 6, kernel_size=3, stride=1, padding=1),  # Output 6 channels for the 6D rotation
+            nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to (batch_size, 6, 1, 1)
+            nn.Flatten()  # Flatten to shape (batch_size, 6)
+        )
+
+    def rot6d_to_rotmat(self, x):
+        """Convert 6D rotation representation to 3x3 rotation matrix."""
+        x = x.view(-1, 3, 2)  # Reshape into two 3D vectors
+        a1 = x[:, :, 0]  # First 3D vector
+        a2 = x[:, :, 1]  # Second 3D vector
+
+        # Normalize a1 to get the first basis vector
+        b1 = nn.functional.normalize(a1, dim=1)
+
+        # Make a2 orthogonal to b1
+        b2 = nn.functional.normalize(a2 - (b1 * a2).sum(dim=1, keepdim=True) * b1, dim=1)
+
+        # Compute the third basis vector by taking the cross product
+        b3 = torch.cross(b1, b2, dim=1)
+
+        # Form the rotation matrix
+        rot_mat = torch.stack([b1, b2, b3], dim=-1)  # Shape: (batch_size, 3, 3)
+        return rot_mat
+
+    def forward(self, x):
+        x_resized = F.interpolate(x, size=(224, 224), mode='bilinear', align_corners=True)
+        outputs = self.dpt(
+            x_resized,
+            head_mask=None,
+            output_attentions=False,
+            output_hidden_states=False,
+            return_dict=False,
+        )
         
         # Final MLP to produce classification logits over 256 bins
-        x_logits = self.x_head(outputs)  # Shape: [batch_size, 256, 128, 128]
-        y_logits = self.y_head(outputs)  # Shape: [batch_size, 256, 128, 128]
-        z_logits = self.z_head(outputs)  # Shape: [batch_size, 256, 128, 128]
-        #cls_logits = self.cls_head(outputs)
-        
-        # Concatenate NOCS logits along the channel dimension
-        # nocs_logits = torch.cat((x_logits, y_logits, z_logits), dim=1)
+        geometry_features = self.geometry_head(outputs)
+        x_logits = self.x_head(geometry_features)  # Shape: [batch_size, num_bins, 128, 128]
+        y_logits = self.y_head(geometry_features)  # Shape: [batch_size, num_bins, 128, 128]
+        z_logits = self.z_head(geometry_features)  # Shape: [batch_size, num_bins, 128, 128]
+        masks = self.mask_head(geometry_features)
 
-        #quaternions = self.rotation_head(outputs)
-        masks = self.mask_head(outputs)
-        #rotation = self.rotation_head(outputs)
+        # Softmax over the bin dimension for x, y, z logits
+        x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
+        y_bins = torch.softmax(y_logits, dim=1)
+        z_bins = torch.softmax(z_logits, dim=1)
 
-        #batch_size = nocs_logits.size(0)
-        #nocs_logits = nocs_logits.view(batch_size, 3, self.num_bins, self.input_resolution, self.input_resolution)
+        # Bin centers (shared for x, y, z dimensions)
+        bin_centers = torch.linspace(-1, 1, self.num_bins).to(x_logits.device)  # Bin centers
 
-        return x_logits, y_logits, z_logits, masks
-    
+        # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
+        nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+        nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+        nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
+
+        # Combine the estimated NOCS map from x, y, and z dimensions
+        nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
+
+        rotation_6d = self.rotation_head(nocs_estimated)
+        rotation_matrix = self.rot6d_to_rotmat(rotation_6d)
+
+        return x_logits, y_logits, z_logits, masks, rotation_matrix
+
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):
 #         super(MultiDINO, self).__init__()
