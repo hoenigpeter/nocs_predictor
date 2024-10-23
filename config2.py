@@ -14,14 +14,14 @@ freeze_backbone = True
 train_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_train/scene{01..34}.tar"
 val_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_val/val_scene{1..2}.tar"
 test_data_root = "/media/ssd2/peter/datasets/housecat6d_nocs_val/val_scene{1..2}.tar"
-models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+models_root = "/media/ssd2/peter/datasets/obj_models_ply_1000"
 
-class_name = 2
+class_name = 1
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_2"
-val_img_dir = "./val_img_2"
-test_img_dir = "./test_img_2"
+weight_dir = "./weights_1"
+val_img_dir = "./val_img_1"
+test_img_dir = "./test_img_1"
 
 # Input Data Settings
 size = 128
