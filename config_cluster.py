@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 16
+batch_size = 64
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -11,18 +11,17 @@ iter_cnt = 100
 freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
-val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
-#test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
-test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test_new/test_scene1.tar"
-models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+train_data_root = "/home/peter.hoenig/housecat6d_nocs_train/scene{01..34}.tar"
+val_data_root = "/home/peter.hoenig/housecat6d_nocs_val/val_scene{1..2}.tar"
+test_data_root = "/home/peter.hoenig/housecat6d_nocs_val/val_scene{1..2}.tar"
+models_root = "/home/peter.hoenig/housecat6d/obj_models_ply_1000"
 
-class_name = 2
+class_name = None
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_2"
-val_img_dir = "./val_img_2"
-test_img_dir = "./test_img_2"
+weight_dir = "./weights_vit"
+val_img_dir = "./val_img_vit"
+test_img_dir = "./test_img_vit"
 
 # Input Data Settings
 size = 128
@@ -40,7 +39,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = True
+augmentation = False
 center_crop = False
 
 # Visualization Settings

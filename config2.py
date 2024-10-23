@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 16
+batch_size = 64
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -28,7 +28,7 @@ size = 128
 num_bins = 50
 
 # Optimizer Settings
-lr = 1e-4
+lr = 1e-5
 beta1 = 0.9
 beta2 = 0.999
 epsilon = 1e-8
@@ -39,7 +39,7 @@ train_num_workers = 2
 val_num_workers = 2
 
 # Augmentation Settings
-augmentation = True
+augmentation = False
 center_crop = False
 
 # Visualization Settings
