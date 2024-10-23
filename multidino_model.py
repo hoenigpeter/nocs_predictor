@@ -186,6 +186,7 @@ class DPT(DPTPreTrainedModel):
                     param.requires_grad = False
                 print(param.requires_grad)
 
+
         else:
             self.dpt = DPTModel(config, add_pooling_layer=False)
         
@@ -234,8 +235,92 @@ class DPT(DPTPreTrainedModel):
 
         return hidden_states
 
+class SimpleViT(nn.Module):
+    def __init__(self, input_dim, patch_size, num_patches, embedding_dim=768, num_blocks=10):
+        super(SimpleViT, self).__init__()
+        self.embedding_dim = embedding_dim
+        self.patch_size = patch_size
+        self.proj = nn.Linear(input_dim, embedding_dim)  # Project to embedding dimension
+        self.positional_encodings = nn.Parameter(torch.randn(1, num_patches, embedding_dim))  # Learnable positional encodings
+        # Transformer encoder layers
+        self.transformer_blocks = nn.ModuleList([
+            nn.TransformerEncoderLayer(d_model=embedding_dim, nhead=8) for _ in range(num_blocks)
+        ])
+
+    def create_patches(self, x):
+        # x shape: (batch_size, channels, height, width)
+        batch_size, channels, height, width = x.shape
+        
+        # Calculate number of patches
+        num_patches_height = height // self.patch_size
+        num_patches_width = width // self.patch_size
+        patch_dim = channels * self.patch_size * self.patch_size  # Flattened patch size
+
+        # Reshape to (batch_size, num_patches_height, num_patches_width, channels, patch_size, patch_size)
+        x = x.unfold(2, self.patch_size, self.patch_size).unfold(3, self.patch_size, self.patch_size)  # (batch_size, channels, num_patches_height, num_patches_width, patch_size, patch_size)
+        
+        # Rearrange dimensions and flatten patches
+        x = x.contiguous().view(batch_size, channels, num_patches_height, num_patches_width, self.patch_size, self.patch_size)  # Ensure contiguous
+        x = x.permute(0, 2, 3, 1, 4, 5)  # Rearrange to (batch_size, num_patches_height, num_patches_width, channels, patch_size, patch_size)
+        x = x.reshape(batch_size, num_patches_height * num_patches_width, patch_dim)  # (batch_size, num_patches, patch_dim)
+    
+        return x
+
+    def forward(self, x):
+        # Create patches
+        batch_size = x.size(0)
+        x = self.create_patches(x)  # (batch_size, num_patches, patch_dim)
+
+        x = self.proj(x)  # (batch_size, num_patches, embedding_dim)
+
+        x = x + self.positional_encodings  # (batch_size, num_patches, embedding_dim)
+
+        for block in self.transformer_blocks:
+            x = block(x)
+
+        x = x.view(batch_size, 32, 32, self.embedding_dim)
+
+        x = x.permute(0, 3, 1, 2)
+
+        return x
+
+class UpsamplingNetwork(nn.Module):
+    def __init__(self, input_channels=768, output_channels=3):
+        super(UpsamplingNetwork, self).__init__()
+        self.conv1 = nn.Conv2d(input_channels, 512, kernel_size=3, padding=1)  # From 768 to 512 channels
+        self.relu1 = nn.ReLU()
+        
+        self.upsample1 = nn.ConvTranspose2d(512, 256, kernel_size=4, stride=2, padding=1)  # Upsample to 64x64
+        self.relu2 = nn.ReLU()
+
+        self.conv2 = nn.Conv2d(256, 128, kernel_size=3, padding=1)
+        self.relu3 = nn.ReLU()
+        
+        self.upsample2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)  # Upsample to 128x128
+        self.relu4 = nn.ReLU()
+
+        self.conv3 = nn.Conv2d(64, output_channels, kernel_size=3, padding=1)  # Final output to 50 channels
+
+    def forward(self, x):
+        # Reshape input from (batch_size, 32, 32, 768) to (batch_size, 768, 32, 32)
+        x = self.conv1(x)  # Shape: (batch_size, 512, 32, 32)
+        x = self.relu1(x)
+
+        x = self.upsample1(x)  # Shape: (batch_size, 256, 64, 64)
+        x = self.relu2(x)
+
+        x = self.conv2(x)  # Shape: (batch_size, 128, 64, 64)
+        x = self.relu3(x)
+
+        x = self.upsample2(x)  # Shape: (batch_size, 64, 128, 128)
+        x = self.relu4(x)
+
+        x = self.conv3(x)  # Shape: (batch_size, 50, 128, 128)
+
+        return x
+        
 class MultiDINO(nn.Module):
-    def __init__(self, input_resolution=256, num_bins=50, freeze_backbone=False):
+    def __init__(self, input_resolution=256, num_bins=256, freeze_backbone=False):
         super(MultiDINO, self).__init__()
 
         self.nhead = 4
@@ -248,48 +333,69 @@ class MultiDINO(nn.Module):
         config = DPTConfig(backbone_config=backbone_config, add_pooling_layer=False)
 
         self.dpt = DPT(config, self.freeze_backbone)
+    
+        input_channels = 256
+        height = 128
+        width = 128
+        patch_size = 4  # Patch size of 16x16
+        num_patches = (height // patch_size) * (width // patch_size)  # Total patches
 
-
-        self.x_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-            nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-            nn.ReLU(),
-            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
-        )
-
-        self.y_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-            nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-            nn.ReLU(),
-            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
-        )
+        self.vit = SimpleViT(input_dim=input_channels * patch_size * patch_size,
+                   patch_size=patch_size, 
+                   num_patches=num_patches,
+                   embedding_dim=768)
         
-        self.z_head = nn.Sequential(
-            nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
-            nn.ReLU(),
-            nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
-            nn.ReLU(),
-            nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        self.x_head = UpsamplingNetwork(input_channels=768, output_channels=50)
+        self.y_head = UpsamplingNetwork(input_channels=768, output_channels=50)
+        self.z_head = UpsamplingNetwork(input_channels=768, output_channels=50)
+
+        self.mask_head = nn.Sequential(
+            UpsamplingNetwork(input_channels=768, output_channels=1),
+            nn.Sigmoid()
         )
+
+        # self.x_head = nn.Sequential(
+        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+        #     nn.ReLU(),
+        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        # )
+
+        # self.y_head = nn.Sequential(
+        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+        #     nn.ReLU(),
+        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        # )
+        
+        # self.z_head = nn.Sequential(
+        #     nn.Conv2d(256, 128, kernel_size=3, padding=1),  # Increase channels for more features
+        #     nn.ReLU(),
+        #     nn.Conv2d(128, 64, kernel_size=3, padding=1),  # Match the output channels to the existing heads
+        #     nn.ReLU(),
+        #     nn.Conv2d(64, self.num_bins, kernel_size=3, padding=1),  # Input channels from geometry head
+        # )
 
         self.rotation_head = nn.Sequential(
             nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),  # Adjust input channels to 3
             nn.ReLU(),  # Activation for non-linearity
-            nn.Conv2d(64, 6, kernel_size=3, stride=1, padding=1),  # Output 6 channels for the 6D rotation
+            nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),  # More channels for complexity
+            nn.ReLU(),
+            nn.Conv2d(128, 6, kernel_size=3, stride=1, padding=1),  # Output 6 channels for the 6D rotation
             nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to (batch_size, 6, 1, 1)
             nn.Flatten()  # Flatten to shape (batch_size, 6)
         )
 
-        self.mask_head = nn.Sequential(
-            nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
-            nn.BatchNorm2d(256),
-            nn.ReLU(),
-            nn.Dropout(0.1, False),
-            nn.Conv2d(256, 1, kernel_size=1),
-            nn.Sigmoid()
-        )
+        # self.mask_head = nn.Sequential(
+        #     nn.Conv2d(256, 256, kernel_size=3, padding=1, bias=False),
+        #     nn.BatchNorm2d(256),
+        #     nn.ReLU(),
+        #     nn.Dropout(0.1, False),
+        #     nn.Conv2d(256, 1, kernel_size=1),
+        #     nn.Sigmoid()
+        # )
 
     def rot6d_to_rotmat(self, x):
         """Convert 6D rotation representation to 3x3 rotation matrix."""
@@ -319,32 +425,38 @@ class MultiDINO(nn.Module):
             output_hidden_states=False,
             return_dict=False,
         )
+        
+        vit_features = self.vit(outputs)
 
-        x_logits = self.x_head(outputs)
-        y_logits = self.y_head(outputs)
-        z_logits = self.z_head(outputs)
-        masks = self.mask_head(outputs)
+        # Final MLP to produce classification logits over 256 bins
+        x_logits = self.x_head(vit_features)  # Shape: [batch_size, num_bins, 128, 128]
+        y_logits = self.y_head(vit_features)  # Shape: [batch_size, num_bins, 128, 128]
+        z_logits = self.z_head(vit_features)  # Shape: [batch_size, num_bins, 128, 128]
+        masks = self.mask_head(vit_features)
 
-        x_bins = torch.softmax(x_logits, dim=1)
+        # Softmax over the bin dimension for x, y, z logits
+        x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
         y_bins = torch.softmax(y_logits, dim=1)
         z_bins = torch.softmax(z_logits, dim=1)
 
-        bin_centers = torch.linspace(-1, 1, self.num_bins).to(x_logits.device)
+        # Bin centers (shared for x, y, z dimensions)
+        bin_centers = torch.linspace(-1, 1, self.num_bins).to(x_logits.device)  # Bin centers
 
+        # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
         nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
         nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
         nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
 
+        # Combine the estimated NOCS map from x, y, and z dimensions
         nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
-        masks = self.mask_head(outputs)
         rotation_6d = self.rotation_head(nocs_estimated)
         rotation_matrix = self.rot6d_to_rotmat(rotation_6d)
 
-        return x_logits, y_logits, z_logits, masks, rotation_matrix
+        return x_logits, y_logits, z_logits, nocs_estimated, masks, rotation_matrix
 
 class MultiDINORot(nn.Module):
-    def __init__(self, input_resolution=256, num_bins=50, num_labels=10, freeze_backbone=False):
+    def __init__(self, input_resolution=256, num_bins=256, num_labels=10, freeze_backbone=False):
         super(MultiDINORot, self).__init__()
 
         self.nhead = 4
@@ -452,14 +564,14 @@ class MultiDINORot(nn.Module):
         nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
         nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
         nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, self.num_bins, 1, 1), dim=1)
-
+      
         # Combine the estimated NOCS map from x, y, and z dimensions
         nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
         rotation_6d = self.rotation_head(nocs_estimated)
         rotation_matrix = self.rot6d_to_rotmat(rotation_6d)
 
-        return x_logits, y_logits, z_logits, masks, rotation_matrix
+        return x_logits, y_logits, z_logits, nocs_estimated, masks, rotation_matrix
 
 # class MultiDINO(nn.Module):
 #     def __init__(self, input_resolution=256, num_bins=50):
@@ -527,73 +639,7 @@ class MultiDINORot(nn.Module):
 
 #         return nocs_logits, mask, rotation
 
-# class UNetGeometryHead(nn.Module):
-#     def __init__(self):
-#         super(UNetGeometryHead, self).__init__()
 
-#         # Encoding path
-#         self.enc1 = nn.Sequential(
-#             nn.Conv2d(256, 128, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(128, 128, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#         )
-#         self.pool1 = nn.MaxPool2d(kernel_size=2)  # Output: (batch_size, 128, 128, 128)
-
-#         self.enc2 = nn.Sequential(
-#             nn.Conv2d(128, 64, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(64, 64, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#         )
-#         self.pool2 = nn.MaxPool2d(kernel_size=2)  # Output: (batch_size, 64, 64, 64)
-
-#         self.enc3 = nn.Sequential(
-#             nn.Conv2d(64, 32, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(32, 32, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#         )
-#         self.pool3 = nn.MaxPool2d(kernel_size=2)  # Output: (batch_size, 32, 32, 32)
-
-#         # Bottleneck
-#         self.bottleneck = nn.Sequential(
-#             nn.Conv2d(32, 32, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#             nn.Conv2d(32, 32, kernel_size=3, padding=1),
-#             nn.ReLU(inplace=True),
-#         )
-
-#         # Decoding path
-#         self.upconv3 = nn.ConvTranspose2d(32, 32, kernel_size=2, stride=2)  # Upsampling
-#         self.upconv2 = nn.ConvTranspose2d(64, 64, kernel_size=2, stride=2)  # Upsampling
-#         self.upconv1 = nn.ConvTranspose2d(128, 128, kernel_size=2, stride=2)  # Upsampling
-
-#         self.final_conv = nn.Conv2d(256, 128, kernel_size=1)  # Output: (batch_size, 32, 128, 128)
-
-#     def forward(self, x):
-#         enc1_out = self.enc1(x)  # (batch_size, 128, 128, 128)
-#         pool1_out = self.pool1(enc1_out)
-
-#         enc2_out = self.enc2(pool1_out)  # (batch_size, 64, 64, 64)
-#         pool2_out = self.pool2(enc2_out)
-
-#         enc3_out = self.enc3(pool2_out)  # (batch_size, 32, 32, 32)
-#         pool3_out = self.pool3(enc3_out)
-
-#         bottleneck_out = self.bottleneck(pool3_out)  # (batch_size, 32, 32, 32)
-
-#         dec3_out = self.upconv3(bottleneck_out)  # (batch_size, 32, 64, 64)
-#         dec3_out = torch.cat((dec3_out, enc3_out), dim=1)  # Concatenate along channel dimension
-
-#         dec2_out = self.upconv2(dec3_out)  # (batch_size, 64, 128, 128)
-#         dec2_out = torch.cat((dec2_out, enc2_out), dim=1)  # Concatenate along channel dimension
-        
-#         dec1_out = self.upconv1(dec2_out)  # (batch_size, 128, 256, 256)
-#         dec1_out = torch.cat((dec1_out, enc1_out), dim=1)  # Concatenate along channel dimension
-
-#         output = self.final_conv(dec1_out)  # Final output: (batch_size, 32, 128, 128)
-#         return output
 
 # class PositionalEncoding(nn.Module):
 #     def __init__(self, d_model, max_len=768, device='cuda:0'):

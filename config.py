@@ -12,17 +12,17 @@ freeze_backbone = True
 
 # Data Paths
 train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
-val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{01..02}.tar"
+val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
 #test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
 test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test_new/test_scene1.tar"
 models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
 
-class_name = 1
+class_name = 2
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_1"
-val_img_dir = "./val_img_1"
-test_img_dir = "./test_img_1"
+weight_dir = "./weights_2"
+val_img_dir = "./val_img_2"
+test_img_dir = "./test_img_2"
 
 # Input Data Settings
 size = 128

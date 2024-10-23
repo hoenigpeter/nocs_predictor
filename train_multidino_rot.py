@@ -366,7 +366,6 @@ def main(config):
                 nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
                 # 4.) NOCS self-supervised loss
-                # 4.) NOCS self-supervised loss
                 background_region = (mask_images_gt == 0).float()
 
                 background_loss = F.mse_loss(((nocs_estimated + 1) / 2) * background_region, mask_images_gt * background_region) * 5

@@ -15,7 +15,50 @@ import open3d as o3d
 import io
 import PIL.Image
 
-import config2 as config
+import argparse
+import importlib.util
+
+import config
+
+# Function to load config from the passed file
+def load_config(config_path):
+    spec = importlib.util.spec_from_file_location("config", config_path)
+    config = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(config)
+    return config
+
+# Parse command-line arguments
+def parse_args():
+    parser = argparse.ArgumentParser(description="Training Script")
+    parser.add_argument('config', type=str, help="Path to the config file")
+    return parser.parse_args()
+
+def add_loss(est_points_batch, gt_points_batch):
+    """Calculate the ADD score for a batch of point clouds using GPU."""
+
+    distances = torch.cdist(est_points_batch, gt_points_batch, p=2)
+    min_distances, _ = distances.min(dim=2)
+    add_scores = min_distances.mean(dim=1)
+
+    return add_scores.mean()
+
+def apply_rotation(points, rotation_matrix):
+    """
+    Apply a rotation matrix to a batch of points.
+    
+    :param points: Tensor of shape (batch_size, 1000, 3)
+    :param rotation_matrix: Tensor of shape (batch_size, 3, 3)
+    :return: Transformed points of shape (batch_size, 1000, 3)
+    """
+    # Ensure the correct shapes for batch matrix multiplication
+    # points: (batch_size, 1000, 3) -> (batch_size, 3, 1000)
+    points_transposed = points.transpose(1, 2)
+    
+    # Perform batch matrix multiplication: rotated_points = rotation_matrix @ points_transposed
+    rotated_points = torch.bmm(rotation_matrix, points_transposed)  # (batch_size, 3, 1000)
+    
+    # Transpose back to (batch_size, 1000, 3)
+    return rotated_points.transpose(1, 2)
 
 def preload_pointclouds(models_root):
     pointclouds = {}
@@ -119,7 +162,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
             lambda nocs: preprocess(load_image(nocs), size, Image.NEAREST, center_crop=center_crop), 
             lambda info: info) \
-        .select(lambda sample: (class_name is None) or (sample[3].get('category_id') == class_name))  # Adjust index for 'info.json'
+        .select(lambda sample: (class_name is None) or (sample[3].get('category_id') == class_name)) # Adjust index for 'info.json'
 
     return dataset
 

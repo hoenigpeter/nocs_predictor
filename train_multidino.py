@@ -25,50 +25,7 @@ import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
                     create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, \
-                    preload_pointclouds, plot_single_image
-
-import argparse
-import importlib.util
-
-# Function to load config from the passed file
-def load_config(config_path):
-    spec = importlib.util.spec_from_file_location("config", config_path)
-    config = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(config)
-    return config
-
-# Parse command-line arguments
-def parse_args():
-    parser = argparse.ArgumentParser(description="Training Script")
-    parser.add_argument('config', type=str, help="Path to the config file")
-    return parser.parse_args()
-
-def add_loss(est_points_batch, gt_points_batch):
-    """Calculate the ADD score for a batch of point clouds using GPU."""
-
-    distances = torch.cdist(est_points_batch, gt_points_batch, p=2)
-    min_distances, _ = distances.min(dim=2)
-    add_scores = min_distances.mean(dim=1)
-
-    return add_scores.mean()
-
-def apply_rotation(points, rotation_matrix):
-    """
-    Apply a rotation matrix to a batch of points.
-    
-    :param points: Tensor of shape (batch_size, 1000, 3)
-    :param rotation_matrix: Tensor of shape (batch_size, 3, 3)
-    :return: Transformed points of shape (batch_size, 1000, 3)
-    """
-    # Ensure the correct shapes for batch matrix multiplication
-    # points: (batch_size, 1000, 3) -> (batch_size, 3, 1000)
-    points_transposed = points.transpose(1, 2)
-    
-    # Perform batch matrix multiplication: rotated_points = rotation_matrix @ points_transposed
-    rotated_points = torch.bmm(rotation_matrix, points_transposed)  # (batch_size, 3, 1000)
-    
-    # Transpose back to (batch_size, 1000, 3)
-    return rotated_points.transpose(1, 2)
+                    preload_pointclouds, plot_single_image, apply_rotation, parse_args, load_config
 
 def main(config):
     setup_environment(str(config.gpu_id))
@@ -116,8 +73,6 @@ def main(config):
     #     collate_fn=custom_collate_fn
     # )
 
-    # pointclouds = preload_pointclouds(config.models_root)
-
     # Training Loop
     epoch = 0
     iteration = 0
@@ -143,8 +98,8 @@ def main(config):
             start_time_iteration = time.time()
 
             # Update learning rate with linear warmup
-            if step < config.warmup_steps and epoch == 0:
-                lr = config.lr * (step / config.warmup_steps)
+            if iteration < config.warmup_steps:
+                lr = config.lr * (iteration / config.warmup_steps)
             else:
                 lr = config.lr  # Use target learning rate after warmup
             
@@ -196,15 +151,15 @@ def main(config):
             rotation_gt = torch.stack(rotations).to(device)
 
             # forward pass through generator
-            x_logits, y_logits, z_logits, masks_estimated, rotation_est = generator(rgb_images_gt)
+            x_logits, y_logits, z_logits, nocs_estimated, masks_estimated, rotation_est = generator(rgb_images_gt)
 
             # LOSSES
             # 1.) Rot Loss
-            #rot_loss = F.l1_loss(rotation_est, rotation_gt)
             gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)
             est_points_transformed = apply_rotation(pcs_gt, rotation_est)
-            rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
-
+            #rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
+            rot_loss = F.l1_loss(rotation_est, rotation_gt)
+            
             # 2.) Mask loss
             binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
 
@@ -213,7 +168,7 @@ def main(config):
             # 3.) NOCS Logits loss
             scaled_nocs = (nocs_images_normalized_gt + 1) * (config.num_bins - 1) / 2.0
             target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
-            
+           
             binary_nocs_loss = 0
             binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
             binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
@@ -221,23 +176,6 @@ def main(config):
 
             # 3.) NOCS Regression loss for each dimension
 
-            # Softmax over the bin dimension for x, y, z logits
-            x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
-            y_bins = torch.softmax(y_logits, dim=1)
-            z_bins = torch.softmax(z_logits, dim=1)
-
-            # Bin centers (shared for x, y, z dimensions)
-            bin_centers = torch.linspace(-1, 1, config.num_bins).to(x_logits.device)  # Bin centers
-
-            # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
-            nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-            nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-            nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-
-            # Combine the estimated NOCS map from x, y, and z dimensions
-            nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
-
-            # Calculate the L1 regression loss between the estimated NOCS map and ground truth
             regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
             # 4.) NOCS self-supervised loss
@@ -278,7 +216,7 @@ def main(config):
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
                 print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f},Reg NOCS Loss: {:.4f}, Masked NOCS Loss: {:.4f}, Seg Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
-                    epoch, iteration, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, \
+                    epoch, step, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, \
                         avg_running_masked_nocs_loss, avg_running_seg_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
@@ -338,7 +276,7 @@ def main(config):
 
                 pcs_np = np.array(pcs)
                 pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
-                pcs_gt = pcs_gt.to(device)  # 16, 10000, 3
+                pcs_gt = pcs_gt.to(device)
                 
                 # RGB processing
                 rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
@@ -350,7 +288,7 @@ def main(config):
                 binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
                 binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
                 rgb_images_gt = rgb_images_gt * binary_mask
-
+                
                 # MASK processing
                 mask_images_gt = mask_images.float() / 255.0
                 mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
@@ -366,15 +304,15 @@ def main(config):
                 rotation_gt = torch.stack(rotations).to(device)
 
                 # forward pass through generator
-                x_logits, y_logits, z_logits, masks_estimated, rotation_est = generator(rgb_images_gt)
+                x_logits, y_logits, z_logits, nocs_estimated, masks_estimated, rotation_est = generator(rgb_images_gt)
 
                 # LOSSES
-                # 1.) Rotation loss - from R to quat
-                gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)  # Shape: (batch_size, 1000, 3)
-                est_points_transformed = apply_rotation(pcs_gt, rotation_est)  # Shape: (batch_size, 1000, 3)
-                rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
-                #rot_loss = F.l1_loss(rotation_est, rotation_gt)
-
+                # 1.) Rot Loss
+                gt_points_transformed = apply_rotation(pcs_gt, rotation_gt)
+                est_points_transformed = apply_rotation(pcs_gt, rotation_est)
+                #rot_loss = add_loss(est_points_transformed, gt_points_transformed) * 100
+                rot_loss = F.l1_loss(rotation_est, rotation_gt)
+                
                 # 2.) Mask loss
                 binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
 
@@ -383,7 +321,7 @@ def main(config):
                 # 3.) NOCS Logits loss
                 scaled_nocs = (nocs_images_normalized_gt + 1) * (config.num_bins - 1) / 2.0
                 target_bins = scaled_nocs.long().clamp(0, config.num_bins - 1)  # Ensure values are within bin range
-                
+            
                 binary_nocs_loss = 0
                 binary_nocs_loss += F.cross_entropy(x_logits, target_bins[:, 0])
                 binary_nocs_loss += F.cross_entropy(y_logits, target_bins[:, 1])
@@ -391,23 +329,6 @@ def main(config):
 
                 # 3.) NOCS Regression loss for each dimension
 
-                # Softmax over the bin dimension for x, y, z logits
-                x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
-                y_bins = torch.softmax(y_logits, dim=1)
-                z_bins = torch.softmax(z_logits, dim=1)
-
-                # Bin centers (shared for x, y, z dimensions)
-                bin_centers = torch.linspace(-1, 1, config.num_bins).to(x_logits.device)  # Bin centers
-
-                # Compute the estimated NOCS map for each dimension by multiplying with bin centers and summing over bins
-                nocs_x_estimated = torch.sum(x_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-                nocs_y_estimated = torch.sum(y_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-                nocs_z_estimated = torch.sum(z_bins * bin_centers.view(1, config.num_bins, 1, 1), dim=1)
-
-                # Combine the estimated NOCS map from x, y, and z dimensions
-                nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
-
-                # Calculate the L1 regression loss between the estimated NOCS map and ground truth
                 regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
                 # 4.) NOCS self-supervised loss
@@ -465,8 +386,8 @@ def main(config):
         # Save loss log to JSON after each epoch
         with open(config.weight_dir + "/loss_log.json", "w") as f:
             json.dump(loss_log, f, indent=4)
+
         epoch += 1
-        iteration = 0   
 
 if __name__ == "__main__":
     args = parse_args()

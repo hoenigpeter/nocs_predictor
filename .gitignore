@@ -193,3 +193,7 @@ weights_megapose_bottle/
 housecat_v1
 _val_img_megapose_bottle
 _weights_megapose_bottle
+
+val_img_1_v2/
+val_img_2/
+weights_1_v2/
