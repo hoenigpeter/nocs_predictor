@@ -25,7 +25,8 @@ import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
                     create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, \
-                    preload_pointclouds, plot_single_image, apply_rotation, parse_args, load_config
+                    preload_pointclouds, plot_single_image, apply_rotation, parse_args, load_config, \
+                    add_loss
 
 def main(config):
     setup_environment(str(config.gpu_id))
@@ -52,7 +53,7 @@ def main(config):
             val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
 
-    pointclouds = preload_pointclouds(config.models_root)
+    pointclouds = preload_pointclouds(config.models_root, num_categories=config.num_categories)
 
     # train_dataloader = DataLoader(
     #     train_dataset, 
@@ -87,6 +88,7 @@ def main(config):
         running_masked_nocs_loss = 0.0 
         running_seg_loss = 0.0 
         running_rot_loss = 0.0
+        running_bg_loss = 0.0
 
         generator.train()
 
@@ -118,7 +120,7 @@ def main(config):
                 obj_name = entry["obj_name"]
                 obj_cat = entry["category_id"]
                 
-                gt_points = pointclouds[(str(obj_cat), obj_name)]
+                gt_points = pointclouds[(str(obj_cat), str(obj_name))]
                 pcs.append(gt_points)
 
             pcs_np = np.array(pcs)
@@ -162,7 +164,6 @@ def main(config):
             
             # 2.) Mask loss
             binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
-
             seg_loss = F.mse_loss(masks_estimated, mask_images_gt[:, 0, :, :].unsqueeze(1))
 
             # 3.) NOCS Logits loss
@@ -175,7 +176,6 @@ def main(config):
             binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
 
             # 3.) NOCS Regression loss for each dimension
-
             regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
             # 4.) NOCS self-supervised loss
@@ -185,9 +185,18 @@ def main(config):
 
             masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
 
-            # LOSSES Summation
-            loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss + 1.0 * rot_loss
+            background_region = (mask_images_gt == 0).float()
+            bg_loss = F.mse_loss(((nocs_estimated + 1) / 2) * background_region, mask_images_gt * background_region) * 5
 
+            # LOSSES Summation
+            loss = 0
+            loss += config.w_NOCS_bins * binary_nocs_loss
+            loss += config.w_NOCS_cont * regression_nocs_loss
+            loss += config.w_NOCS_ss * masked_nocs_loss
+            loss += config.w_seg * seg_loss
+            loss += config.w_Rot * rot_loss
+            loss += config.w_bg * bg_loss
+            
             # Loss backpropagation
             optimizer_generator.zero_grad()
             loss.backward()
@@ -201,6 +210,7 @@ def main(config):
             running_masked_nocs_loss += masked_nocs_loss.item()
             running_seg_loss += seg_loss.item()
             running_rot_loss += rot_loss.item()
+            running_bg_loss += bg_loss.item()
 
             running_loss += loss.item()
             iteration += 1
@@ -212,12 +222,13 @@ def main(config):
                 avg_running_masked_nocs_loss = running_masked_nocs_loss / config.iter_cnt
                 avg_running_seg_loss = running_seg_loss / config.iter_cnt
                 avg_running_rot_loss = running_rot_loss / config.iter_cnt
+                avg_running_bg_loss = running_bg_loss / config.iter_cnt
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f},Reg NOCS Loss: {:.4f}, Masked NOCS Loss: {:.4f}, Seg Loss: {:.4f}, Rot Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
+                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, Binary NOCS Loss: {:.4f}, Reg NOCS Loss: {:.4f}, Masked NOCS Loss: {:.4f}, Seg Loss: {:.4f}, Rot Loss: {:.4f}, BG Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
                     epoch, step, avg_loss, avg_running_binary_nocs_loss, avg_running_regression_nocs_loss, \
-                        avg_running_masked_nocs_loss, avg_running_seg_loss, avg_running_rot_loss, lr_current, elapsed_time_iteration))
+                        avg_running_masked_nocs_loss, avg_running_seg_loss, avg_running_rot_loss, avg_running_bg_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
@@ -228,6 +239,7 @@ def main(config):
                     "masked_nocs_loss": avg_running_masked_nocs_loss,
                     "seg_loss": avg_running_seg_loss,
                     "rot_loss": avg_running_rot_loss,
+                    "bg_loss": avg_running_bg_loss,
                     "learning_rate": lr_current,
                     "time_per_100_iterations": elapsed_time_iteration
                 })
@@ -238,6 +250,7 @@ def main(config):
                 running_masked_nocs_loss = 0
                 running_seg_loss = 0
                 running_rot_loss = 0
+                running_bg_loss = 0
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
                 plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, masks_estimated, binary_masks, rotation_est)
@@ -252,6 +265,7 @@ def main(config):
         running_masked_nocs_loss = 0
         running_seg_loss = 0
         running_rot_loss = 0
+        running_bg_loss = 0
 
         val_iter = 0
         start_time_epoch = time.time()
@@ -271,7 +285,7 @@ def main(config):
                     obj_name = entry["obj_name"]
                     obj_cat = entry["category_id"]
                     
-                    gt_points = pointclouds[(str(obj_cat), obj_name)]
+                    gt_points = pointclouds[(str(obj_cat), str(obj_name))]
                     pcs.append(gt_points)
 
                 pcs_np = np.array(pcs)
@@ -315,7 +329,6 @@ def main(config):
                 
                 # 2.) Mask loss
                 binary_masks = (masks_estimated > 0.5).float()  # Convert to float for multiplication
-
                 seg_loss = F.mse_loss(masks_estimated, mask_images_gt[:, 0, :, :].unsqueeze(1))
 
                 # 3.) NOCS Logits loss
@@ -328,7 +341,6 @@ def main(config):
                 binary_nocs_loss += F.cross_entropy(z_logits, target_bins[:, 2])
 
                 # 3.) NOCS Regression loss for each dimension
-
                 regression_nocs_loss = F.l1_loss(nocs_estimated, nocs_images_normalized_gt)
 
                 # 4.) NOCS self-supervised loss
@@ -338,8 +350,17 @@ def main(config):
 
                 masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
 
+                background_region = (mask_images_gt == 0).float()
+                bg_loss = F.mse_loss(((nocs_estimated + 1) / 2) * background_region, mask_images_gt * background_region) * 5
+
                 # LOSSES Summation
-                loss = 1.0 * binary_nocs_loss + 1.0 * regression_nocs_loss + 1.0 * masked_nocs_loss + 1.0 * seg_loss + 1.0 * rot_loss
+                loss = 0
+                loss += config.w_NOCS_bins * binary_nocs_loss
+                loss += config.w_NOCS_cont * regression_nocs_loss
+                loss += config.w_NOCS_ss * masked_nocs_loss
+                loss += config.w_seg * seg_loss
+                loss += config.w_Rot * rot_loss
+                loss += config.w_bg * bg_loss
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
 
@@ -348,6 +369,7 @@ def main(config):
                 running_masked_nocs_loss += masked_nocs_loss.item()
                 running_seg_loss += seg_loss.item()
                 running_rot_loss += rot_loss.item()
+                running_bg_loss += bg_loss.item()
 
                 running_loss += loss.item()
 
@@ -359,7 +381,8 @@ def main(config):
         avg_running_masked_nocs_loss = running_masked_nocs_loss / val_iter
         avg_running_seg_loss = running_seg_loss / val_iter
         avg_running_rot_loss = running_rot_loss / val_iter
-        
+        avg_running_bg_loss = running_bg_loss / val_iter
+
         loss_log.append({
             "epoch": epoch,
             "val_binary_nocs_loss": avg_running_binary_nocs_loss,
@@ -367,6 +390,7 @@ def main(config):
             "val_masked_nocs_loss": avg_running_masked_nocs_loss,
             "val_seg_loss": avg_running_seg_loss,
             "val_rot_loss": avg_running_rot_loss,
+            "val_bg_loss": avg_running_bg_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })

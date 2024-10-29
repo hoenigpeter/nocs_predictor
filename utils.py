@@ -60,11 +60,12 @@ def apply_rotation(points, rotation_matrix):
     # Transpose back to (batch_size, 1000, 3)
     return rotated_points.transpose(1, 2)
 
-def preload_pointclouds(models_root):
+def preload_pointclouds(models_root, num_categories):
     pointclouds = {}
-    
-    for category in range(1, 11):  # Subfolders 1 to 10
+
+    for category in range(1, num_categories + 1):  # Subfolders 1 to 10
         category_path = os.path.join(models_root, str(category))
+
         for obj_file in os.listdir(category_path):
             if obj_file.endswith(".ply"):
                 obj_name = os.path.splitext(obj_file)[0]
@@ -101,21 +102,21 @@ def custom_collate_fn(batch):
         'info': info_batch,
     }
 
-# def custom_collate_fn(batch):
-#     rgb_batch = torch.stack([torch.tensor(item[0]) for item in batch])
-#     mask_batch = torch.stack([torch.tensor(item[1]) for item in batch])
-#     nocs_batch = torch.stack([torch.tensor(item[2]) for item in batch])
-#     depth_batch = torch.stack([torch.tensor(item[3]) for item in batch])
-#     info_batch = [item[4] for item in batch]
-#     # info_batch = {i: item[3] for i, item in enumerate(batch)}
+def custom_collate_fn_test(batch):
+    rgb_batch = torch.stack([torch.tensor(item[0]) for item in batch])
+    mask_batch = torch.stack([torch.tensor(item[1]) for item in batch])
+    nocs_batch = torch.stack([torch.tensor(item[2]) for item in batch])
+    depth_batch = torch.stack([torch.tensor(item[3]) for item in batch])
+    info_batch = [item[4] for item in batch]
+    # info_batch = {i: item[3] for i, item in enumerate(batch)}
 
-#     return {
-#         'rgb': rgb_batch,
-#         'mask': mask_batch,
-#         'nocs': nocs_batch,
-#         'metric_depth': depth_batch,
-#         'info': info_batch,
-#     }
+    return {
+        'rgb': rgb_batch,
+        'mask': mask_batch,
+        'nocs': nocs_batch,
+        'metric_depth': depth_batch,
+        'info': info_batch,
+    }
 
 class WebDatasetWrapper(Dataset):
     def __init__(self, dataset):
@@ -166,21 +167,21 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
 
     return dataset
 
-# def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False, class_name=None):
+def create_webdataset_test(dataset_paths, size=128, shuffle_buffer=1000, augment=False, center_crop=False, class_name=None):
 
-#     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
-#         .decode() \
-#         .shuffle(shuffle_buffer, initial=size) \
-#         .to_tuple("rgb.png", "mask.png", "nocs.png", "metric_depth.png", "info.json") \
-#         .map_tuple( 
-#             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
-#             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
-#             lambda nocs: preprocess(load_image(nocs), size, Image.NEAREST, center_crop=center_crop), 
-#             lambda metric_depth: preprocess(load_depth_image(metric_depth), size, Image.NEAREST, center_crop=center_crop, is_depth=True),  # Preprocess depth after loading
-#             lambda info: info) \
-#         .select(lambda sample: (class_name is None) or (sample[4].get('category_id') == class_name))  # Adjust index for 'info.json'
+    dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
+        .decode() \
+        .shuffle(shuffle_buffer, initial=size) \
+        .to_tuple("rgb.png", "mask.png", "nocs.png", "metric_depth.png", "info.json") \
+        .map_tuple( 
+            lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
+            lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
+            lambda nocs: preprocess(load_image(nocs), size, Image.NEAREST, center_crop=center_crop), 
+            lambda metric_depth: preprocess(load_depth_image(metric_depth), size, Image.NEAREST, center_crop=center_crop, is_depth=True),  # Preprocess depth after loading
+            lambda info: info) \
+        .select(lambda sample: (class_name is None) or (sample[4].get('category_id') == class_name))  # Adjust index for 'info.json'
 
-#     return dataset
+    return dataset
 
 # def preprocess(image, size, interpolation, augment=False, center_crop=False):
 
@@ -250,6 +251,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
 #     return img_array
 
 def preprocess(image, size, interpolation, augment=False, center_crop=False, is_depth=False):
+    
     if is_depth:
         # Depth image (float32) processing
         img_array = image.astype(np.float32)  # Ensure it's a float32 array
@@ -294,7 +296,6 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False, is_
                                     iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
                                     ], random_order=True)
         img_array = seq_syn.augment_image(img_array)
-
 
     image = Image.fromarray(img_array)
     image = image.resize((size, size), resample=interpolation)

@@ -15,7 +15,6 @@ from torch.utils.data import Dataset, DataLoader
 from torch.utils.tensorboard import SummaryWriter
 import pytorch3d
 from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_matrix
-from multidino_model import MultiDINO as multidino
 from transformers import CLIPProcessor, CLIPModel
 import open3d as o3d
 from torch.optim.lr_scheduler import CosineAnnealingLR
@@ -26,7 +25,7 @@ import json
 import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
-                    create_webdataset, custom_collate_fn, make_log_dirs, plot_progress_imgs, \
+                    create_webdataset_test, custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
                     preload_pointclouds, plot_single_image
 
 import teaserpp_python
@@ -410,10 +409,10 @@ def main(config):
     generator.eval()
 
     # Instantiate train and val dataset + dataloaders
-    test_dataset = create_webdataset(config.test_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=config.class_name)
+    test_dataset = create_webdataset_test(config.test_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=config.class_name)
 
     test_dataloader = wds.WebLoader(
-            test_dataset, batch_size=config.test_batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
+            test_dataset, batch_size=config.test_batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn_test,
     )
 
     with torch.no_grad():

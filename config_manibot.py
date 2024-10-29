@@ -6,28 +6,37 @@ shuffle_buffer = 1000
 save_epoch_interval = 5
 gpu_id = 0
 
+iter_cnt = 100
+
 freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
-val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test_new/test_scene1.tar"
-#test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
-test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test_new/test_scene1.tar"
-models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+train_data_root = "/media/ssd2/peter/datasets/manibot/train_nocs/{000000..000008}.tar"
+val_data_root = "/media/ssd2/peter/datasets/manibot/test_nocs/000009.tar"
+test_data_root = "/media/ssd2/peter/datasets/manibot/test_nocs/000009.tar"
+models_root = "/media/ssd2/peter/datasets/manibot/obj_models_ply_1000"
 
-class_name = 6
+class_name = None
+num_categories = 1
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_rot"
-val_img_dir = "./val_img_rot"
-test_img_dir = "./test_img_rot"
+weight_dir = "./weights_manibot"
+val_img_dir = "./val_img_manibot"
+test_img_dir = "./test_img_manibot"
+
+w_NOCS_bins = 1.0
+w_NOCS_cont = 1.0
+w_NOCS_ss = 1.0
+w_seg = 1.0
+w_Rot = 1.0
+w_bg = 0
 
 # Input Data Settings
 size = 128
 num_bins = 50
 
 # Optimizer Settings
-lr = 1e-4
+lr = 1e-5
 beta1 = 0.9
 beta2 = 0.999
 epsilon = 1e-8

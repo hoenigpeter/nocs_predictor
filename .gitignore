@@ -198,3 +198,9 @@ val_img_1_v2/
 val_img_2/
 weights_1_v2/
 weights_2/
+
+val_img_1/
+val_img_1_roxanne/
+val_img_cluster/
+val_img_manibot/
+weights_1/

@@ -15,7 +15,7 @@ train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
 val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
 #test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test/test_scene{1..5}.tar"
 test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_test_new/test_scene1.tar"
-models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
+models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_5000"
 
 class_name = 2
 
@@ -23,6 +23,13 @@ class_name = 2
 weight_dir = "./weights_2"
 val_img_dir = "./val_img_2"
 test_img_dir = "./test_img_2"
+
+w_NOCS_bins = 1.0
+w_NOCS_cont = 1.0
+w_NOCS_ss = 1.0
+w_seg = 1.0
+w_Rot = 1.0
+w_bg = 0
 
 # Input Data Settings
 size = 128
