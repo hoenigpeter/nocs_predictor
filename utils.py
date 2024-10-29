@@ -157,7 +157,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode() \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "info.json") \
+        .to_tuple("rgb.png", "mask_visib.png", "nocs.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
@@ -172,7 +172,7 @@ def create_webdataset_test(dataset_paths, size=128, shuffle_buffer=1000, augment
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode() \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask.png", "nocs.png", "metric_depth.png", "info.json") \
+        .to_tuple("rgb.png", "mask_visib.png", "nocs.png", "metric_depth.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
