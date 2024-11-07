@@ -25,7 +25,7 @@ import json
 import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
-                    create_webdataset_test, custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
+                    create_webdataset, create_webdataset_test, custom_collate_fn, make_log_dirs, plot_progress_imgs, \
                     preload_pointclouds, plot_single_image
 
 import teaserpp_python
@@ -409,10 +409,10 @@ def main(config):
     generator.eval()
 
     # Instantiate train and val dataset + dataloaders
-    test_dataset = create_webdataset_test(config.test_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=config.class_name)
+    test_dataset = create_webdataset(config.test_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=False, class_name=config.class_name)
 
     test_dataloader = wds.WebLoader(
-            test_dataset, batch_size=config.test_batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn_test,
+            test_dataset, batch_size=config.test_batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
 
     with torch.no_grad():
@@ -421,14 +421,9 @@ def main(config):
             # unwrap the batch
             rgb_images = batch['rgb']
             mask_images = batch['mask']
-            nocs_images = batch['nocs']
-            depth_images = batch['metric_depth']
-            infos = batch['info']
 
             print("rgb: ", rgb_images.shape)
             print("mask: ", mask_images.shape)
-            print("depth: ", depth_images.shape)
-
             # RGB processing
             rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
             rgb_images = (rgb_images.float() / 127.5) - 1
@@ -441,38 +436,13 @@ def main(config):
 
             rgb_images_gt = rgb_images_gt * binary_mask
 
-            depth_images = depth_images * binary_mask[0][0].cpu().squeeze()
-
             # MASK processing
             mask_images_gt = mask_images.float() / 255.0
             mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
             mask_images_gt = mask_images_gt.to(device)
 
-            # NOCS processing
-            nocs_images_normalized = (nocs_images.float() / 127.5) - 1
-            nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
-            nocs_images_normalized_gt = nocs_images_normalized.to(device)
-
-            # ROTATION processing
-            rotations = [entry["rotation"] for entry in infos]
-            translations = [entry["translation"] for entry in infos]
-            large_bboxes = [entry["large_bbox"] for entry in infos]
-            category_names = [entry["category_name"] for entry in infos]
-            category_ids = [entry["category_id"] for entry in infos]
-
-            print(large_bboxes)
-
-            meshes_path =  '/ssd3/datasets_bop/housecat6d/obj_models/obj_models_small_size_final'
-            mesh_folders = sorted(os.listdir(meshes_path))
-            mesh_folder = mesh_folders[category_ids[0] - 1]
-
-            mesh_path = meshes_path + "/" + mesh_folder + "/" + category_names[0] + ".obj"
-            mesh = trimesh.load(mesh_path, force='mesh')
-            canonical_bbox = mesh.bounding_box_oriented.vertices
-            ground_truth_bbox = np.dot(rotations[0], canonical_bbox.T).T + translations[0]
-    
             # forward pass through generator
-            x_logits, y_logits, z_logits, _ = generator(rgb_images_gt)
+            x_logits, y_logits, z_logits, _, _, _ = generator(rgb_images_gt)
 
             x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
             y_bins = torch.softmax(y_logits, dim=1)
@@ -489,94 +459,16 @@ def main(config):
             # Combine the estimated NOCS map from x, y, and z dimensions
             nocs_estimated = torch.stack([nocs_x_estimated, nocs_y_estimated, nocs_z_estimated], dim=1)
 
-            plot_nocs_image((nocs_estimated + 1 ) /2, min_neighbors=5, neighborhood_size=0.05, eps=0.05, min_samples=10)
+            #plot_nocs_image((nocs_estimated + 1 ) /2, min_neighbors=5, neighborhood_size=0.05, eps=0.05, min_samples=10)
 
             # Optionally, plot the NOCS image using matplotlib
-            plot_single_image(config.test_img_dir + "/rgb_images_gt", step, rgb_images_gt)
+            plot_single_image(config.test_img_dir + "/rgb", step, rgb_images_gt)
             plot_single_image(config.test_img_dir + "/nocs_estimated", step, nocs_estimated)
-            plot_single_image(config.test_img_dir + "/nocs_gt", step, nocs_images_normalized_gt)
 
-            # generate_and_visualize_point_cloud(nocs_estimated)
+            #generate_and_visualize_point_cloud(nocs_estimated)
             # generate_and_visualize_point_cloud(depth_images)
 
             print("nocs_estimated: ", nocs_estimated.shape)
-            print("depth_images: ", depth_images.shape)
-
-            depth_images = depth_images/1000
-
-            dst = generate_point_cloud_from_depth(depth_images[0].numpy(), large_bboxes[0], camera_intrinsics).T
-            src = generate_point_cloud_from_nocs(nocs_estimated).T
-
-            print("src: ", src.shape)
-            print("dst: ", dst.shape)
-
-            src, dst, _ = filter_zero_points(src, dst)
-            dst, src, _ = filter_zero_points(dst, src)
-
-            # src =  src / 127.5 - 1
-
-            num_points_to_sample = 100
-
-            src_sampled, dst_sampled = sample_point_cloud(src, dst, num_points_to_sample)
-
-            pcd_src = create_open3d_point_cloud(src, [0, 0, 1])  # Blue for source
-            pcd_dst = create_open3d_point_cloud(dst, [1, 0, 0])  # Red for destination
-
-            pcd_src_sampled = create_open3d_point_cloud(src_sampled, [0, 0, 1])  # Blue for source
-            pcd_dst_sampled = create_open3d_point_cloud(dst_sampled, [1, 0, 0])  # Red for destination
-
-            print("Sampled src shape: ", src_sampled.shape)
-            print("Sampled dst shape: ", dst_sampled.shape)
-
-            # Populate the parameters
-            solver_params = teaserpp_python.RobustRegistrationSolver.Params()
-            solver_params.cbar2 = 1
-            solver_params.noise_bound = 0.01
-            solver_params.estimate_scaling = True
-            solver_params.rotation_estimation_algorithm = (
-                teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
-            )
-            solver_params.rotation_gnc_factor = 1.4
-            solver_params.rotation_max_iterations = 100
-            solver_params.rotation_cost_threshold = 1e-12
-
-            # Create the TEASER++ solver and solve the registration problem
-            teaserpp_solver = teaserpp_python.RobustRegistrationSolver(solver_params)
-
-            teaserpp_solver.solve(src_sampled, dst_sampled)
-
-            # Get the solution
-            solution = teaserpp_solver.getSolution()
-            print("Solution is:", solution)
-
-            # Extract rotation, translation, and scale from the solution
-            R = solution.rotation
-            t = solution.translation
-            s = solution.scale
-
-            # Apply the estimated transformation to the source point cloud
-            src_transformed = s * np.matmul(R, src) + t.reshape(3, 1)
-
-            # Create Open3D point clouds for visualization
-            #src_transformed = ransac_registration(src_sampled, dst_sampled)
-            pcd_src_transformed = create_open3d_point_cloud(src_transformed, [0, 1, 0])  # Green
-
-            # Create line set to visualize correspondences
-            line_set = create_line_set(src_sampled, dst_sampled, [0, 1, 0])  # Green lines for correspondences
-        
-            # Visualize the point clouds using Open3D
-            o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed, line_set],
-                                            window_name="TEASER++ Registration with PLY and NOCS",
-                                            width=1920, height=1080,
-                                            left=50, top=50,
-                                            point_show_normal=False)
-            
-            estimated_bbox_corners = compute_3d_bounding_box(pcd_src_transformed.points)
-            print("estimated bbox corners: ", estimated_bbox_corners)
-            print()
-
-            iou = calculate_3d_iou(estimated_bbox_corners, ground_truth_bbox)
-            print("IOU BAAAABYYYYY: ", iou)
 
 if __name__ == "__main__":
     args = parse_args()

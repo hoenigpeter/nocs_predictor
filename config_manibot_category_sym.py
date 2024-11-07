@@ -31,12 +31,12 @@ class_name = None
 num_categories = 1
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_manibot_no_sym"
-val_img_dir = "./val_img_manibot_no_sym"
-test_img_dir = "./test_img_manibot_no_sym"
+weight_dir = "./weights_manibot_category_sym"
+val_img_dir = "./val_img_manibot_category_sym"
+test_img_dir = "./test_img_manibot_category_sym"
 
-with_transformer_loss = False
-symmetry_type = 'instance_symmetries' # or 'category_symmetries'
+with_transformer_loss = True
+symmetry_type = 'category_symmetries' # or 'category_symmetries'
 
 w_NOCS_bins = 1.0
 w_NOCS_cont = 1.0

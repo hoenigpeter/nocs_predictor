@@ -31,18 +31,18 @@ class_name = None
 num_categories = 1
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_manibot_no_sym"
-val_img_dir = "./val_img_manibot_no_sym"
-test_img_dir = "./test_img_manibot_no_sym"
+weight_dir = "./weights_manibot_unsupervised"
+val_img_dir = "./val_img_manibot_unsupervised"
+test_img_dir = "./test_img_manibot_unsupervised"
 
 with_transformer_loss = False
 symmetry_type = 'instance_symmetries' # or 'category_symmetries'
 
-w_NOCS_bins = 1.0
-w_NOCS_cont = 1.0
+w_NOCS_bins = 0.0
+w_NOCS_cont = 0.0
 w_NOCS_ss = 0.0
 w_seg = 1.0
-w_Rot = 0.0
+w_Rot = 1.0
 w_bg = 1.0
 
 # Input Data Settings

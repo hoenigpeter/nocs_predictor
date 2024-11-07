@@ -161,8 +161,9 @@ cython_debug/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-/val_img
-/weights
+/val_img*
+/weights*
+/test_img*
 /val_img_custom_mse
 /weights_custom_mse
 

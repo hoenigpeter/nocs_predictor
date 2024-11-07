@@ -17,9 +17,119 @@ import PIL.Image
 
 import argparse
 import importlib.util
+from torchvision import transforms
+import json
 
 import config
 
+def get_enlarged_bbox(bbox, img_shape, bbox_scaler=1.5):
+    """
+    Calculate enlarged bounding box coordinates based on the input bounding box and scaling factor.
+    
+    Args:
+        bbox (tuple or list): Original bounding box coordinates (xmin, ymin, xmax, ymax).
+        img_shape (tuple): Shape of the image (height, width, channels).
+        bbox_scaler (float): Scaling factor for enlarging the bounding box.
+
+    Returns:
+        tuple: Coordinates of the enlarged bounding box (crop_xmin, crop_ymin, crop_xmax, crop_ymax).
+    """
+    bbox_width = bbox[2] - bbox[0]
+    bbox_height = bbox[3] - bbox[1]
+    center_x = (bbox[2] + bbox[0]) // 2
+    center_y = (bbox[3] + bbox[1]) // 2
+        
+    # Determine the size of the enlarged square bounding box
+    enlarged_size = int(max(bbox_width, bbox_height) * bbox_scaler)
+    print("enlarged_size: ", enlarged_size)
+
+    # Calculate the coordinates of the enlarged bounding box, clamping within image boundaries
+    crop_xmin = max(center_x - enlarged_size // 2, 0)
+    crop_xmax = min(center_x + enlarged_size // 2, img_shape[1])
+    crop_ymin = max(center_y - enlarged_size // 2, 0)
+    crop_ymax = min(center_y + enlarged_size // 2, img_shape[0])
+
+    return np.array([crop_xmin, crop_ymin, crop_xmax, crop_ymax])
+
+class COCODataset(Dataset):
+    def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
+        # Load COCO-style JSON
+        with open(coco_json_path, 'r') as f:
+            self.coco_data = json.load(f)
+        
+        self.root_dir = root_dir
+        self.image_size = image_size
+        self.augment = augment
+        self.center_crop = center_crop
+        self.is_depth = is_depth
+
+        self.enlarge_factor = 1.5
+
+        # Parse images and annotations
+        self.images = {img['id']: img for img in self.coco_data['images']}
+        self.annotations = self.coco_data['annotations']
+        self.categories = {cat['id']: cat['name'] for cat in self.coco_data['categories']}
+
+    def __len__(self):
+        return len(self.annotations)
+
+    def __getitem__(self, idx):
+        annotation = self.annotations[idx]
+        img_info = self.images[annotation['image_id']]
+        img_path = os.path.join(self.root_dir, img_info['file_name'])
+        image = Image.open(img_path).convert("RGB")
+        image = np.array(image)
+
+        # Extract bounding box and mask (if available)
+        #bbox = annotation['bbox']
+        bbox = np.array(annotation['bbox'], dtype=int)
+        print("bbox: ", bbox)
+
+        mask = self.decode_segmentation(annotation['segmentation'], img_info['width'], img_info['height'])
+        mask = 1 - mask
+
+        # Apply cropping and preprocessing
+        enlarged_bbox = get_enlarged_bbox(bbox, image.shape, bbox_scaler=self.enlarge_factor)
+        print("enlarged box: ", enlarged_bbox)
+        cropped_image = crop_and_resize(image, enlarged_bbox, target_size=self.image_size, interpolation=Image.BILINEAR)
+        cropped_mask = crop_and_resize(mask, enlarged_bbox, target_size=self.image_size, interpolation=Image.NEAREST)
+        
+        return {
+            "rgb_crop": cropped_image,
+            "mask_crop": cropped_mask,
+            "rgb": transforms.ToTensor()(image),  # For later post-processing
+            "bbox": torch.tensor(bbox, dtype=torch.float32),
+            "mask": torch.tensor(mask, dtype=torch.uint8)
+        }
+
+    def decode_segmentation(self, rle, width, height):
+        """
+        Decodes COCO-style RLE to a binary mask.
+        
+        :param rle: Dictionary with 'counts' (RLE-encoded values) and 'size' (height, width).
+        :param width: Width of the output binary mask.
+        :param height: Height of the output binary mask.
+        :return: Decoded binary mask as a numpy array.
+        """
+        # Initialize an empty 1D mask with all zeros
+        mask = np.zeros(width * height, dtype=np.uint8)
+
+        # Unroll the RLE counts into mask positions
+        rle_counts = rle['counts']
+        current_position = 0
+
+        # Apply the counts as mask segments
+        for i in range(len(rle_counts)):
+            run_length = rle_counts[i]
+            if i % 2 == 0:
+                # For even indices, set the corresponding pixels to 1 (foreground)
+                mask[current_position:current_position + run_length] = 1
+            # Update position
+            current_position += run_length
+
+        # Reshape the flat mask into the 2D binary mask (height, width) and return
+        return mask.reshape((height, width), order="F")  # Order "F" to match column-wise storage
+    
 # Function to load config from the passed file
 def load_config(config_path):
     spec = importlib.util.spec_from_file_location("config", config_path)
@@ -101,6 +211,31 @@ def custom_collate_fn(batch):
         'nocs': nocs_batch,
         'info': info_batch,
     }
+
+def collate_fn(batch):
+    rgb_images = torch.stack([torch.tensor(item['rgb']) for item in batch])
+    rgb_cropped = torch.stack([torch.tensor(item['rgb_crop']) for item in batch])
+    mask_cropped = torch.stack([torch.tensor(item['mask_crop']) for item in batch])
+    mask_images = torch.stack([torch.tensor(item['mask']) for item in batch])
+    bboxes = torch.stack([torch.tensor(item['bbox']) for item in batch])
+
+    return {
+        "rgb": rgb_images,
+        "rgb_crop": rgb_cropped,
+        "mask_crop": mask_cropped,
+        "mask": mask_images,
+        "bbox": bboxes,
+    }
+
+def post_process_crop_to_original(crop, original_image, bbox, image_size):
+    # Resize crop back to bounding box size
+    x_min, y_min, width, height = map(int, bbox)
+    crop_resized = Image.fromarray(crop).resize((width, height), Image.BILINEAR)
+
+    # Place resized crop back on original image
+    original_image = np.array(original_image)
+    original_image[y_min:y_min + height, x_min:x_min + width] = np.array(crop_resized)
+    return original_image
 
 def custom_collate_fn_test(batch):
     rgb_batch = torch.stack([torch.tensor(item[0]) for item in batch])
@@ -399,3 +534,50 @@ def plot_single_image(output_dir, iteration, nocs_estimated):
     # Save the figure
     plt.savefig(imgfn, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
+
+# ACHTUNG!!!! hier unbedingt bbox sache in ordnung bringen!!!!
+def crop_and_resize(img, enlarged_bbox, target_size=128, interpolation=Image.NEAREST):
+    """
+    Crop, pad, and resize the image based on the provided enlarged bounding box.
+
+    Args:
+        img (numpy array): Input image.
+        enlarged_bbox (tuple): Coordinates of the enlarged bounding box (crop_ymin, crop_xmin, crop_ymax, crop_xmax).
+        target_size (int): The size to resize the cropped image to.
+        interpolation (Image interpolation method): Interpolation method to be used for resizing.
+
+    Returns:
+        numpy array: Cropped and resized image.
+    """
+    crop_xmin, crop_ymin, crop_xmax, crop_ymax = enlarged_bbox
+
+    enlarged_size = max(crop_ymax - crop_ymin, crop_xmax - crop_xmin)
+    
+    # Initialize the cropped image with zeros
+    if img.ndim == 3:
+        cropped_img = np.zeros((enlarged_size, enlarged_size, img.shape[2]), dtype=img.dtype)
+    else:
+        cropped_img = np.zeros((enlarged_size, enlarged_size), dtype=img.dtype)
+    
+    # Calculate offsets to center the cropped area
+    y_offset = (enlarged_size - (crop_ymax - crop_ymin)) // 2
+    x_offset = (enlarged_size - (crop_xmax - crop_xmin)) // 2
+    
+    # Crop and pad the image
+    if img.ndim == 3:
+        cropped_img[y_offset:y_offset + (crop_ymax - crop_ymin), x_offset:x_offset + (crop_xmax - crop_xmin)] = img[crop_ymin:crop_ymax, crop_xmin:crop_xmax, :]
+    else:
+        cropped_img[y_offset:y_offset + (crop_ymax - crop_ymin), x_offset:x_offset + (crop_xmax - crop_xmin)] = img[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
+
+    # Resize if necessary
+    #if cropped_img.shape[0] > target_size:
+    cropped_img_pil = Image.fromarray(cropped_img)
+
+    # Resize the image
+    cropped_img_pil = cropped_img_pil.resize((target_size, target_size), interpolation)
+    cropped_img = np.array(cropped_img_pil)
+    
+    if cropped_img.ndim == 3:
+        cropped_img = np.transpose(cropped_img, (2, 0, 1))
+
+    return cropped_img

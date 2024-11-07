@@ -8,6 +8,14 @@ gpu_id = 0
 
 iter_cnt = 100
 
+fx = 705.4699707031250000
+fy = 703.0218505859375000
+cx = 554.1227923106198432
+cy = 432.4074733765810379 
+
+width = 1096
+height = 852
+
 freeze_backbone = True
 
 # Data Paths
