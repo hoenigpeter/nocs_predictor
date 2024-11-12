@@ -19,37 +19,10 @@ import argparse
 import importlib.util
 from torchvision import transforms
 import json
+import imageio
 
 import config
 
-def get_enlarged_bbox(bbox, img_shape, bbox_scaler=1.5):
-    """
-    Calculate enlarged bounding box coordinates based on the input bounding box and scaling factor.
-    
-    Args:
-        bbox (tuple or list): Original bounding box coordinates (xmin, ymin, xmax, ymax).
-        img_shape (tuple): Shape of the image (height, width, channels).
-        bbox_scaler (float): Scaling factor for enlarging the bounding box.
-
-    Returns:
-        tuple: Coordinates of the enlarged bounding box (crop_xmin, crop_ymin, crop_xmax, crop_ymax).
-    """
-    bbox_width = bbox[2] - bbox[0]
-    bbox_height = bbox[3] - bbox[1]
-    center_x = (bbox[2] + bbox[0]) // 2
-    center_y = (bbox[3] + bbox[1]) // 2
-        
-    # Determine the size of the enlarged square bounding box
-    enlarged_size = int(max(bbox_width, bbox_height) * bbox_scaler)
-    print("enlarged_size: ", enlarged_size)
-
-    # Calculate the coordinates of the enlarged bounding box, clamping within image boundaries
-    crop_xmin = max(center_x - enlarged_size // 2, 0)
-    crop_xmax = min(center_x + enlarged_size // 2, img_shape[1])
-    crop_ymin = max(center_y - enlarged_size // 2, 0)
-    crop_ymax = min(center_y + enlarged_size // 2, img_shape[0])
-
-    return np.array([crop_xmin, crop_ymin, crop_xmax, crop_ymax])
 
 class COCODataset(Dataset):
     def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
@@ -76,30 +49,46 @@ class COCODataset(Dataset):
     def __getitem__(self, idx):
         annotation = self.annotations[idx]
         img_info = self.images[annotation['image_id']]
+
+        # rgb_filename = img_info['file_name']
+        # depth_filename = "depth" + rgb_filename[3:]
+
+        rgb_filename = img_info['file_name']
+        depth_filename = rgb_filename[:-4] + ".png"
+
         img_path = os.path.join(self.root_dir, img_info['file_name'])
+        depth_path = os.path.join(self.root_dir + "/depth", depth_filename)
+
         image = Image.open(img_path).convert("RGB")
         image = np.array(image)
 
-        # Extract bounding box and mask (if available)
-        #bbox = annotation['bbox']
+        with open(depth_path, 'rb') as f:
+            depth_bytes = f.read()
+        
+        depth_image = imageio.imread(depth_bytes).astype(np.float32) / 1000
+
+        print("rgb shape: ", image.shape)
+        print("depth shape: ", depth_image.shape)
+
         bbox = np.array(annotation['bbox'], dtype=int)
-        print("bbox: ", bbox)
 
         mask = self.decode_segmentation(annotation['segmentation'], img_info['width'], img_info['height'])
         mask = 1 - mask
 
         # Apply cropping and preprocessing
         enlarged_bbox = get_enlarged_bbox(bbox, image.shape, bbox_scaler=self.enlarge_factor)
-        print("enlarged box: ", enlarged_bbox)
-        cropped_image = crop_and_resize(image, enlarged_bbox, target_size=self.image_size, interpolation=Image.BILINEAR)
-        cropped_mask = crop_and_resize(mask, enlarged_bbox, target_size=self.image_size, interpolation=Image.NEAREST)
+
+        cropped_image, metadata = crop_and_resize(image, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.BILINEAR)
+        cropped_mask, metadata = crop_and_resize(mask, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.NEAREST)
         
         return {
             "rgb_crop": cropped_image,
             "mask_crop": cropped_mask,
             "rgb": transforms.ToTensor()(image),  # For later post-processing
-            "bbox": torch.tensor(bbox, dtype=torch.float32),
-            "mask": torch.tensor(mask, dtype=torch.uint8)
+            "depth": transforms.ToTensor()(depth_image),
+            "bbox": torch.tensor(bbox, dtype=torch.int),
+            "mask": torch.tensor(mask, dtype=torch.uint8),
+            "metadata": metadata,
         }
 
     def decode_segmentation(self, rle, width, height):
@@ -214,17 +203,21 @@ def custom_collate_fn(batch):
 
 def collate_fn(batch):
     rgb_images = torch.stack([torch.tensor(item['rgb']) for item in batch])
+    depth_images = torch.stack([torch.tensor(item['depth']) for item in batch])
     rgb_cropped = torch.stack([torch.tensor(item['rgb_crop']) for item in batch])
     mask_cropped = torch.stack([torch.tensor(item['mask_crop']) for item in batch])
     mask_images = torch.stack([torch.tensor(item['mask']) for item in batch])
     bboxes = torch.stack([torch.tensor(item['bbox']) for item in batch])
+    metadata = [(item['metadata']) for item in batch]
 
     return {
         "rgb": rgb_images,
+        "depth": depth_images,
         "rgb_crop": rgb_cropped,
         "mask_crop": mask_cropped,
         "mask": mask_images,
         "bbox": bboxes,
+        "metadata": metadata,
     }
 
 def post_process_crop_to_original(crop, original_image, bbox, image_size):
@@ -318,73 +311,6 @@ def create_webdataset_test(dataset_paths, size=128, shuffle_buffer=1000, augment
 
     return dataset
 
-# def preprocess(image, size, interpolation, augment=False, center_crop=False):
-
-#     img_array = np.array(image).astype(np.uint8)
-#     h, w = img_array.shape[0], img_array.shape[1]
-
-#     if center_crop:
-#         # Undo the enlargement by dividing the current image size by 1.5
-#         original_size = int(min(h, w) / 1.5)
-
-#         # Calculate the crop dimensions to get the center crop of original size
-#         crop_xmin = (w - original_size) // 2
-#         crop_xmax = crop_xmin + original_size
-#         crop_ymin = (h - original_size) // 2
-#         crop_ymax = crop_ymin + original_size
-
-#         # Add 5 pixels of padding around the crop
-#         crop_xmin = max(crop_xmin - 5, 0)  # Ensure xmin doesn't go below 0
-#         crop_xmax = min(crop_xmax + 5, w)  # Ensure xmax doesn't exceed image width
-#         crop_ymin = max(crop_ymin - 5, 0)  # Ensure ymin doesn't go below 0
-#         crop_ymax = min(crop_ymax + 5, h)  # Ensure ymax doesn't exceed image height
-
-#         # Crop the image to the original size with padding
-#         img_array = img_array[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
-#     else:
-#         # Default center crop
-#         crop = min(h, w)
-#         img_array = img_array[(h - crop) // 2:(h + crop) // 2, (w - crop) // 2:(w + crop) // 2]
-
-#     if augment:
-#         prob = 0.8
-#         # seq_syn = iaa.Sequential([
-#         #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-#         #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur(1.2*np.random.rand())),
-#         #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-#         #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-#         #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-#         #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-#         #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-#         #                             ], random_order = True)
-
-#         seq_syn = iaa.Sequential([
-#                                     iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-#                                     iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
-#                                     iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-#                                     iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-#                                     iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-#                                     iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
-#                                     iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-#                                     iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-#                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-#                                     iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-#                                     iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
-#                                     iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
-#                                     iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-#                                     ], random_order = True)
-
-#         # seq_syn = iaa.Sequential([        
-#         #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout( p=0.2, size_percent=0.05) ),
-#         #                             ], random_order = False)
-        
-#         img_array = seq_syn.augment_image(img_array)
-
-#     image = Image.fromarray(img_array)
-#     image = image.resize((size, size), resample=interpolation)
-#     img_array = np.array(image).astype(np.uint8)
-#     return img_array
-
 def preprocess(image, size, interpolation, augment=False, center_crop=False, is_depth=False):
     
     if is_depth:
@@ -457,8 +383,6 @@ def setup_environment(gpu_id):
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
 def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, mask_images_binary, mask_images_gt, rot_estimated_R):
-
-
     # Print value ranges for each input
     # print(f"RGB Images - Min: {torch.min(rgb_images):.4f}, Max: {torch.max(rgb_images):.4f}")
     # print(f"NOCS GT - Min: {torch.min(nocs_images_normalized_gt):.4f}, Max: {torch.max(nocs_images_normalized_gt):.4f}")
@@ -518,7 +442,7 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
     plt.savefig(imgfn, dpi=300)
     plt.close()
 
-def plot_single_image(output_dir, iteration, nocs_estimated):
+def plot_single_image(output_dir, iteration, nocs_estimated, plot_image=False):
 
     # Ensure the output directory exists
     os.makedirs(output_dir, exist_ok=True)
@@ -527,16 +451,17 @@ def plot_single_image(output_dir, iteration, nocs_estimated):
     imgfn = os.path.join(output_dir, f'{iteration:08d}.png')
 
     # Plot NOCS estimated map (scale to 0-1 for visualization)
-    plt.imshow(((nocs_estimated[0] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+    #plt.imshow(((nocs_estimated[0] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+    plt.imshow(nocs_estimated)
     plt.axis('off')  # Turn off axis for cleaner output
-    #plt.show()
+    if plot_image: plt.show()
 
     # Save the figure
     plt.savefig(imgfn, dpi=300, bbox_inches='tight', pad_inches=0)
     plt.close()
 
 # ACHTUNG!!!! hier unbedingt bbox sache in ordnung bringen!!!!
-def crop_and_resize(img, enlarged_bbox, target_size=128, interpolation=Image.NEAREST):
+def crop_and_resize(img, enlarged_bbox, original_bbox, target_size=128, interpolation=Image.NEAREST):
     """
     Crop, pad, and resize the image based on the provided enlarged bounding box.
 
@@ -550,6 +475,7 @@ def crop_and_resize(img, enlarged_bbox, target_size=128, interpolation=Image.NEA
         numpy array: Cropped and resized image.
     """
     crop_xmin, crop_ymin, crop_xmax, crop_ymax = enlarged_bbox
+    orig_xmin, orig_ymin, orig_xmax, orig_ymax = original_bbox
 
     enlarged_size = max(crop_ymax - crop_ymin, crop_xmax - crop_xmin)
     
@@ -569,15 +495,122 @@ def crop_and_resize(img, enlarged_bbox, target_size=128, interpolation=Image.NEA
     else:
         cropped_img[y_offset:y_offset + (crop_ymax - crop_ymin), x_offset:x_offset + (crop_xmax - crop_xmin)] = img[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
 
-    # Resize if necessary
-    #if cropped_img.shape[0] > target_size:
+    # Resize the image to the target size
     cropped_img_pil = Image.fromarray(cropped_img)
-
-    # Resize the image
     cropped_img_pil = cropped_img_pil.resize((target_size, target_size), interpolation)
     cropped_img = np.array(cropped_img_pil)
     
+    # Store metadata for restoring the original bounding box
+    scale_factor = target_size / enlarged_size
+    original_offset_x = orig_xmin - crop_xmin + x_offset
+    original_offset_y = orig_ymin - crop_ymin + y_offset
+    metadata = {
+        "enlarged_bbox": enlarged_bbox,
+        "scale_factor": scale_factor,
+        "original_bbox_size": (orig_xmax - orig_xmin, orig_ymax - orig_ymin),
+        "original_offset": (original_offset_x, original_offset_y),
+    }
+
+    # If the image has multiple channels, transpose for compatibility if needed
     if cropped_img.ndim == 3:
         cropped_img = np.transpose(cropped_img, (2, 0, 1))
 
-    return cropped_img
+    return cropped_img, metadata
+
+def get_enlarged_bbox(bbox, img_shape, bbox_scaler=1.5):
+    """
+    Calculate enlarged bounding box coordinates based on the input bounding box and scaling factor.
+    
+    Args:
+        bbox (tuple or list): Original bounding box coordinates (xmin, ymin, xmax, ymax).
+        img_shape (tuple): Shape of the image (height, width, channels).
+        bbox_scaler (float): Scaling factor for enlarging the bounding box.
+
+    Returns:
+        tuple: Coordinates of the enlarged bounding box (crop_xmin, crop_ymin, crop_xmax, crop_ymax).
+    """
+    bbox_width = bbox[2] - bbox[0]
+    bbox_height = bbox[3] - bbox[1]
+    center_x = (bbox[2] + bbox[0]) // 2
+    center_y = (bbox[3] + bbox[1]) // 2
+        
+    # Determine the size of the enlarged square bounding box
+    enlarged_size = int(max(bbox_width, bbox_height) * bbox_scaler)
+    print("enlarged_size: ", enlarged_size)
+
+    # Calculate the coordinates of the enlarged bounding box, clamping within image boundaries
+    crop_xmin = max(center_x - enlarged_size // 2, 0)
+    crop_xmax = min(center_x + enlarged_size // 2, img_shape[1])
+    crop_ymin = max(center_y - enlarged_size // 2, 0)
+    crop_ymax = min(center_y + enlarged_size // 2, img_shape[0])
+
+    return np.array([crop_xmin, crop_ymin, crop_xmax, crop_ymax])
+
+def restore_original_bbox_crop(cropped_resized_img, metadata, interpolation=Image.NEAREST):
+    """
+    Restore the original bounding box crop from the resized cropped image and metadata.
+    
+    Args:
+        cropped_resized_img (numpy array): Cropped and resized image.
+        metadata (dict): Metadata containing 'enlarged_bbox', 'scale_factor', 'original_bbox_size', and 'original_offset'.
+
+    Returns:
+        numpy array: Cropped image at the original bounding box size.
+    """
+    scale_factor = metadata['scale_factor']
+    original_bbox_size = metadata['original_bbox_size']
+    original_offset = metadata['original_offset']
+
+    # Resize the cropped image back to the enlarged bounding box dimensions
+    enlarged_size = int(cropped_resized_img.shape[1] / scale_factor)
+
+    cropped_img_pil = Image.fromarray(cropped_resized_img)
+    restored_enlarged_img = cropped_img_pil.resize((enlarged_size, enlarged_size), interpolation)
+    restored_enlarged_img = np.array(restored_enlarged_img)
+
+    # Extract the original bounding box area using offsets
+    original_offset_x, original_offset_y = original_offset
+    if restored_enlarged_img.ndim == 3:
+        original_bbox_crop = restored_enlarged_img[
+            original_offset_y:original_offset_y + original_bbox_size[1], 
+            original_offset_x:original_offset_x + original_bbox_size[0], 
+            :
+        ]
+    else:
+        original_bbox_crop = restored_enlarged_img[
+            original_offset_y:original_offset_y + original_bbox_size[1], 
+            original_offset_x:original_offset_x + original_bbox_size[0]
+        ]
+
+    return original_bbox_crop
+
+def overlay_nocs_on_rgb(full_scale_rgb, nocs_image, mask_image, bbox):
+    """
+    Overlays the masked NOCS image onto the full-scale RGB image.
+
+    Args:
+        full_scale_rgb (numpy array): Full-scale RGB image (H, W, C).
+        nocs_image (numpy array): NOCS image already cropped and resized to the original bounding box size (h, w, 3).
+        mask_image (numpy array): Mask image matching the size of the NOCS image (h, w), binary mask.
+        metadata (dict): Metadata containing the position (x, y) to place the NOCS image on the full RGB.
+
+    Returns:
+        numpy array: Full-scale RGB image with the masked NOCS overlay.
+    """
+    # Step 1: Mask the NOCS image using the mask image to remove the background
+    binary_mask = (mask_image > 0).astype(np.uint8)
+    masked_nocs = nocs_image.copy()
+    masked_nocs[binary_mask == 0] = 0
+
+    # Step 2: Get the original bounding box location on the full-scale RGB image from metadata
+    bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
+
+    overlay_image = full_scale_rgb.copy()
+    
+    # Only update pixels where mask is non-zero
+    overlay_region = overlay_image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax]
+    overlay_image[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax] = np.where(
+        mask_image[:, :, np.newaxis] > 0, masked_nocs, overlay_region
+    )
+
+    return overlay_image

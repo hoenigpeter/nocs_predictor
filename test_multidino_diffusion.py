@@ -26,7 +26,7 @@ import webdataset as wds
 
 from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
                     create_webdataset_test, custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
-                    preload_pointclouds, plot_single_image, COCODataset, collate_fn
+                    preload_pointclouds, plot_single_image, COCODataset, collate_fn, restore_original_bbox_crop, overlay_nocs_on_rgb
 
 import teaserpp_python
 
@@ -36,84 +36,6 @@ import importlib.util
 from mpl_toolkits.mplot3d import Axes3D
 from sklearn.neighbors import NearestNeighbors
 from sklearn.cluster import DBSCAN
-
-def plot_nocs_image(nocs_tensor, min_neighbors=400, neighborhood_size=0.2, eps=0.05, min_samples=10):
-    """
-    Plots a cleaned NOCS image as 3D points using Matplotlib, applying k-NN-based filtering 
-    and removing the smallest cluster using DBSCAN.
-
-    Args:
-    - nocs_tensor (torch.Tensor): Tensor of shape (batch_size, 3, height, width) representing the NOCS coordinates.
-    - min_neighbors (int): Minimum number of neighbors a point needs to be considered non-isolated.
-    - neighborhood_size (float): Maximum distance within which to search for neighbors.
-    - eps (float): The maximum distance between two points for them to be considered in the same neighborhood (DBSCAN).
-    - min_samples (int): Minimum number of points required to form a dense region in DBSCAN.
-    """
-    # Ensure input is a 4D tensor [batch_size, 3, height, width]
-    assert nocs_tensor.ndim == 4, "Input tensor must have shape [batch_size, 3, height, width]"
-    
-    batch_size, _, height, width = nocs_tensor.shape
-    
-    # Plot only the first element of the batch
-    nocs_image = nocs_tensor[0]  # Take first NOCS image from the batch, shape is [3, height, width]
-    
-    # Extract x, y, z components from the NOCS image
-    x_coords = nocs_image[0].flatten().cpu().numpy()
-    y_coords = nocs_image[1].flatten().cpu().numpy()
-    z_coords = nocs_image[2].flatten().cpu().numpy()
-    
-    # Stack into a single array of points [num_points, 3]
-    points = np.vstack((x_coords, y_coords, z_coords)).T
-    
-    valid_mask = ~(np.all(points < 0.3, axis=1))
-    points = points[valid_mask]
-
-    # Apply k-NN-based filtering to remove isolated points
-    nbrs = NearestNeighbors(n_neighbors=min_neighbors + 1, radius=neighborhood_size).fit(points)
-    distances, indices = nbrs.kneighbors(points)
-    
-    # Count how many neighbors are within the neighborhood_size
-    neighbor_counts = (distances <= neighborhood_size).sum(axis=1) - 1  # Exclude the point itself
-    
-    # Only keep points with at least `min_neighbors` neighbors
-    valid_mask = neighbor_counts >= min_neighbors
-    points_cleaned = points[valid_mask]
-    
-    # Extract cleaned x, y, z coordinates
-    x_coords_cleaned = points_cleaned[:, 0]
-    y_coords_cleaned = points_cleaned[:, 1]
-    z_coords_cleaned = points_cleaned[:, 2]
-    
-    # Create 3D plot
-    fig = plt.figure()
-    ax = fig.add_subplot(111, projection='3d')
-
-    # Scatter plot of cleaned 3D points
-    ax.scatter(x_coords_cleaned, y_coords_cleaned, z_coords_cleaned, c=z_coords_cleaned, cmap='viridis', marker='o', s=0.5)
-
-    # Set labels and title
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel('Z')
-    ax.set_title('Cleaned NOCS Image 3D Plot (k-NN + Cluster Removal)')
-
-    # Set equal scaling for all axes
-    x_limits = [x_coords_cleaned.min(), x_coords_cleaned.max()]
-    y_limits = [y_coords_cleaned.min(), y_coords_cleaned.max()]
-    z_limits = [z_coords_cleaned.min(), z_coords_cleaned.max()]
-
-    # Create an equal aspect ratio for the plot by setting the limits equally
-    max_range = np.array([x_limits, y_limits, z_limits]).ptp().max() / 2.0  # ptp() gives range of values
-
-    mid_x = np.mean(x_limits)
-    mid_y = np.mean(y_limits)
-    mid_z = np.mean(z_limits)
-
-    ax.set_xlim(mid_x - max_range, mid_x + max_range)
-    ax.set_ylim(mid_y - max_range, mid_y + max_range)
-    ax.set_zlim(mid_z - max_range, mid_z + max_range)
-
-    plt.show()
 
 def calculate_3d_iou(bbox_pred, bbox_gt):
     """
@@ -181,33 +103,35 @@ def compute_3d_bounding_box(point_cloud):
     
     return bbox_corners
 
-def generate_point_cloud_from_depth(depth_image, enlarged_bbox, camera_intrinsics):
-    """
-    Generate a point cloud from a cropped depth image based on the enlarged bounding box and camera intrinsics.
+def generate_point_cloud_from_depth(depth_image, camera_intrinsics=None, bbox=None):
 
-    Args:
-        depth_image (numpy array): Cropped depth image (H, W).
-        enlarged_bbox (numpy array): Coordinates of the enlarged bounding box (crop_ymin, crop_xmin, crop_ymax, crop_xmax).
-        camera_intrinsics (dict): Camera intrinsics containing 'fx', 'fy', 'cx', 'cy', 'width', 'height'.
+    if bbox is not None:
+        # Crop the depth image if bbox is provided
+        crop_xmin, crop_ymin, crop_xmax, crop_ymax = bbox
+        depth_image = depth_image[crop_ymin:crop_ymax, crop_xmin:crop_xmax]
 
-    Returns:
-        numpy array: A point cloud of shape (H * W, 3) where H, W are the dimensions of the input depth image.
-                     Invalid points will have values set to (NaN, NaN, NaN) or zero.
-    """
-    crop_ymin, crop_xmin, crop_ymax, crop_xmax = enlarged_bbox
+        h, w = depth_image.shape
+        
+        # Get camera intrinsics
+        fx = camera_intrinsics['fx']
+        fy = camera_intrinsics['fy']
+        cx = camera_intrinsics['cx']
+        cy = camera_intrinsics['cy']
 
-    # Get camera intrinsics
-    fx = camera_intrinsics['fx']
-    fy = camera_intrinsics['fy']
-    cx = camera_intrinsics['cx']
-    cy = camera_intrinsics['cy']
+        # Adjust optical center (cx, cy) for the cropped depth image
+        adjusted_cx = cx - crop_xmin
+        adjusted_cy = cy - crop_ymin
+    else:
+        h, w = depth_image.shape
+        # Get camera intrinsics
+        fx = camera_intrinsics['fx']
+        fy = camera_intrinsics['fy']
+        cx = camera_intrinsics['cx']
+        cy = camera_intrinsics['cy']
+        adjusted_cx = cx
+        adjusted_cy = cy
 
-    # Adjust optical center (cx, cy) for the cropped depth image
-    adjusted_cx = cx - crop_xmin
-    adjusted_cy = cy - crop_ymin
-
-    # Create a meshgrid of pixel coordinates for the cropped depth image
-    h, w = depth_image.shape
+    # Create a meshgrid of pixel coordinates for the depth image (cropped or not)
     x_coords, y_coords = np.meshgrid(np.arange(w), np.arange(h))
 
     # Flatten the arrays to 1D
@@ -220,16 +144,49 @@ def generate_point_cloud_from_depth(depth_image, enlarged_bbox, camera_intrinsic
     X = (x_coords_flat - adjusted_cx) * Z / fx
     Y = (y_coords_flat - adjusted_cy) * Z / fy
 
-    # Mask invalid points (where depth == 0 or negative), and assign NaN or zero to those points
-    invalid_mask = Z <= 0  # This mask finds invalid points
-    X[invalid_mask] = 0  # Optionally use 0 instead of NaN if needed
-    Y[invalid_mask] = 0
-    Z[invalid_mask] = 0
+    # # Mask invalid points (where depth == 0 or negative), and assign NaN or zero to those points
+    # invalid_mask = Z <= 0  # This mask finds invalid points
+    # X[invalid_mask] = 0  # Optionally use 0 instead of NaN if needed
+    # Y[invalid_mask] = 0
+    # Z[invalid_mask] = 0
 
     # Stack to create the point cloud (X, Y, Z), maintaining the same number of points as pixels
     point_cloud = np.vstack((X, Y, Z)).T  # Shape: (H * W, 3)
 
     return point_cloud
+
+def filter_points_within_limits(src, dst, center=0.5, tolerance=0.05):
+    """
+    Removes points from src and dst where all coordinates in src (x, y, z) are within a specified limit.
+    
+    Parameters:
+        src (np.ndarray): Source point cloud (shape: 3, N).
+        dst (np.ndarray): Destination point cloud (shape: 3, N).
+        center (float): Center of the range to check for each coordinate (default: 0.5).
+        tolerance (float): Tolerance range around the center (default: ±0.05).
+        
+    Returns:
+        src_filtered (np.ndarray): Filtered source point cloud.
+        dst_filtered (np.ndarray): Filtered destination point cloud.
+        indices_removed (np.ndarray): Indices of points removed from src and dst.
+    """
+    # Step 1: Define the lower and upper bounds for the range
+    lower_bound = center - tolerance
+    upper_bound = center + tolerance
+
+    # Step 2: Create a boolean mask where all coordinates in src are within the specified range
+    mask = ~((src[0, :] >= lower_bound) & (src[0, :] <= upper_bound) &
+             (src[1, :] >= lower_bound) & (src[1, :] <= upper_bound) &
+             (src[2, :] >= lower_bound) & (src[2, :] <= upper_bound))
+
+    # Step 3: Retrieve the indices of points to remove (optional)
+    indices_removed = np.where(~mask)[0]
+
+    # Step 4: Apply the mask to filter out unwanted points
+    src_filtered = src[:, mask]
+    dst_filtered = dst[:, mask]
+    
+    return src_filtered, dst_filtered, indices_removed
 
 def filter_zero_points(src, dst):
     """
@@ -316,19 +273,6 @@ def generate_and_visualize_point_cloud(image_tensor):
         # Flatten to get the point cloud (flattening HxWx3 to Nx3)
         points = nocs_image.reshape(-1, 3)  # Shape becomes (H*W, 3)
         
-    elif image_tensor.dim() == 3: 
-        # Depth image case (shape [1, H, W])
-        depth_image = image_tensor.squeeze(0).cpu().numpy()  # Remove batch dim
-        H, W = depth_image.shape
-
-        # Generate the 3D point cloud from the depth values (assuming depth values are in metric units)
-        # Create meshgrid for pixel coordinates
-        xx, yy = np.meshgrid(np.arange(W), np.arange(H))
-        points = np.stack((xx, yy, depth_image), axis=-1).reshape(-1, 3)  # Shape becomes (H*W, 3)
-    
-    else:
-        raise ValueError("Input tensor should be of shape [1, 3, H, W] for NOCS or [1, H, W] for depth images.")
-    
     # Create Open3D point cloud object
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
@@ -336,20 +280,7 @@ def generate_and_visualize_point_cloud(image_tensor):
     # Visualize the point cloud
     o3d.visualization.draw_geometries([pcd])
 
-def generate_point_cloud_from_nocs(image_tensor):
-    """
-    Generates and visualizes a point cloud from a NOCS or depth image tensor.
-    
-    Args:
-        image_tensor (torch.Tensor): Input tensor of shape:
-                                     - [1, 3, H, W] for NOCS images
-                                     - [1, H, W] for depth images
-    """
-
-    # NOCS image case (shape [1, 3, H, W])
-    nocs_image = image_tensor.squeeze(0).cpu().numpy()  # Remove batch dim
-    nocs_image = np.transpose(nocs_image, (1, 2, 0))    # Shape becomes (H, W, 3)
-    
+def generate_point_cloud_from_nocs(nocs_image):   
     # Flatten to get the point cloud (flattening HxWx3 to Nx3)
     points = nocs_image.reshape(-1, 3)  # Shape becomes (H*W, 3)
 
@@ -400,7 +331,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load pre-trained model for inference
-    model_path = os.path.join(config.weight_dir, 'generator_epoch_50.pth')
+    model_path = os.path.join(config.weight_dir, 'generator_epoch_20.pth')
     generator = torch.load(model_path, map_location=device)
     generator.to(device)
 
@@ -408,7 +339,7 @@ def main(config):
     generator.eval()
 
     dataset = COCODataset(config.coco_json_path, config.test_images_root, image_size=config.size, augment=False)
-    test_dataloader = DataLoader(dataset, batch_size=config.test_batch_size, shuffle=True, collate_fn=collate_fn)
+    test_dataloader = DataLoader(dataset, batch_size=config.test_batch_size, shuffle=False, collate_fn=collate_fn)
     print(len(test_dataloader))
 
     with torch.no_grad():
@@ -416,14 +347,14 @@ def main(config):
             print("Step: ", step)
             # unwrap the batch
             rgb_images = batch['rgb']
+            depth_images = batch['depth']
+            mask_full_images = batch['mask']
             rgb_cropped =  batch['rgb_crop']
             mask_images = batch['mask_crop']
-            bboxes = batch['bbox']
+            bboxes = batch['bbox'][0].cpu().numpy()
+            metadata = batch['metadata'][0]
 
-            print("rgb: ", rgb_images.shape)
-            print("rgb_cropped: ", rgb_cropped.shape)
-            print("mask: ", mask_images.shape)
-            print("rgb_cropped: ", rgb_cropped.shape)
+            print(depth_images[0])
 
             rgb_np = rgb_images.squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
             rgb_cropped_np = rgb_cropped.squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
@@ -432,9 +363,12 @@ def main(config):
             # Normalize mask to be binary (0 or 1)
             mask_images = mask_images.unsqueeze(1)
             binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
-            print("binary_mask: ", binary_mask.shape)
             binary_mask = binary_mask.to(device)  # Make sure mask has same shape
-            print("binary_mask: ", binary_mask.shape)
+
+            mask_full_images = mask_full_images.unsqueeze(1)
+            binary_mask_full_images = (mask_full_images > 0).float()  # Converts mask to 0 or 1
+            binary_mask_full_images = binary_mask_full_images.to(device)  # Make sure mask has same shape
+
             # RGB processing
             rgb_images = torch.clamp(rgb_cropped.float(), min=0.0, max=255.0)
             rgb_images = rgb_images.to(device)
@@ -446,8 +380,6 @@ def main(config):
             mask_images_gt = mask_images.float() / 255.0
             mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
             mask_images_gt = mask_images_gt.to(device)
-
-            print(rgb_images_gt.shape)
 
             # # NOCS processing
             # nocs_images_normalized = (nocs_images.float() / 127.5) - 1
@@ -473,8 +405,8 @@ def main(config):
             # ground_truth_bbox = np.dot(rotations[0], canonical_bbox.T).T + translations[0]
     
             # forward pass through generator
-            x_logits, y_logits, z_logits, nocs_estimated, mask_estimated = generator(rgb_images_gt)
-            nocs_estimated = ((nocs_estimated + 1 ) /2)
+            nocs_estimated = generator.inference(rgb_images_gt)
+            #nocs_estimated = ((nocs_estimated + 1 ) /2)
 
             # x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
             # y_bins = torch.softmax(y_logits, dim=1)
@@ -494,9 +426,29 @@ def main(config):
             #plot_nocs_image((nocs_estimated + 1 ) /2, min_neighbors=5, neighborhood_size=0.05, eps=0.05, min_samples=10)
 
             #nocs_estimated = nocs_estimated * binary_mask
+            nocs_estimated = ((nocs_estimated + 1 ) / 2)
+
             nocs_estimated_np = (nocs_estimated).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
+
+            nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadata)
+            mask_resized = restore_original_bbox_crop((mask_np * 255).astype(np.uint8), metadata)
+
+            rgb_nocs_overlay_image = overlay_nocs_on_rgb((rgb_np * 255).astype(np.uint8), nocs_estimated_resized, (mask_resized).astype(np.uint8), bboxes)
+
+            binary_mask = (mask_resized > 0).astype(np.uint8)
+            binary_mask_full_images = (binary_mask_full_images.squeeze(0).squeeze(0).cpu().numpy() > 0).astype(np.uint8)
+            nocs_estimated_resized_masked = nocs_estimated_resized.copy()
+            nocs_estimated_resized_masked[binary_mask == 0] = 0
+
+            depth_images = depth_images.squeeze(0).squeeze(0).cpu().numpy()
+            dst = generate_point_cloud_from_depth(depth_images, camera_intrinsics, None).T
+            #show_pointcloud(dst.T)
+            depth_images[binary_mask_full_images == 0] = 0
+
+            rgb_images_gt_np = (((rgb_images_gt + 1) /2)[0].permute(1, 2, 0).cpu().numpy() * 255 ).astype(np.uint8)
+
             # Plotting
-            fig, axs = plt.subplots(1, 4, figsize=(15, 5))
+            fig, axs = plt.subplots(1, 8, figsize=(15, 5))
             
             # Plot RGB image
             axs[0].imshow(rgb_np)
@@ -518,92 +470,130 @@ def main(config):
             axs[3].set_title("NOCS Estimated")
             axs[3].axis('off')
 
+            # Plot mask
+            axs[4].imshow(nocs_estimated_resized_masked)
+            axs[4].set_title("NOCS Resized")
+            axs[4].axis('off')
 
-            plt.show()
+            # Plot mask
+            axs[5].imshow(mask_resized)
+            axs[5].set_title("Mask Resized")
+            axs[5].axis('off')
 
-            # Optionally, plot the NOCS image using matplotlib
-            plot_single_image(config.test_img_dir + "/rgb_images_gt", step, rgb_images_gt)
-            plot_single_image(config.test_img_dir + "/nocs_estimated", step, nocs_estimated)
-            # plot_single_image(config.test_img_dir + "/nocs_gt", step, nocs_images_normalized_gt)
+            # Plot mask
+            axs[6].imshow(rgb_nocs_overlay_image)
+            axs[6].set_title("Overlay")
+            axs[6].axis('off')
 
-            generate_and_visualize_point_cloud(nocs_estimated)
-#             # generate_and_visualize_point_cloud(depth_images)
+            # Plot mask
+            axs[7].imshow(depth_images)
+            axs[7].set_title("depth cropped")
+            axs[7].axis('off')
 
-#             print("nocs_estimated: ", nocs_estimated.shape)
-#             print("depth_images: ", depth_images.shape)
+            #plt.show()
 
-#             depth_images = depth_images/1000
+            plot_single_image(config.test_img_dir + "/rgb_images_gt", step, rgb_np, False)
+            plot_single_image(config.test_img_dir + "/rgb_cropped_np", step, rgb_cropped_np, False)
+            plot_single_image(config.test_img_dir + "/rgb_images_gt_np", step, rgb_images_gt_np, False)
+            plot_single_image(config.test_img_dir + "/mask_np", step, mask_np, False)
+            plot_single_image(config.test_img_dir + "/nocs_estimated", step, nocs_estimated_np, False)
+            plot_single_image(config.test_img_dir + "/overlay", step, rgb_nocs_overlay_image, False)
 
-#             dst = generate_point_cloud_from_depth(depth_images[0].numpy(), large_bboxes[0], camera_intrinsics).T
-#             src = generate_point_cloud_from_nocs(nocs_estimated).T
+            # #generate_and_visualize_point_cloud(nocs_estimated)
+            # print(nocs_estimated.shape)
+            # print(depth_images.shape)
+            # depth_cloud = generate_point_cloud_from_depth(depth_images, camera_intrinsics, bboxes)
+            # print(depth_cloud.shape)
+            # show_pointcloud(depth_cloud)
 
-#             print("src: ", src.shape)
-#             print("dst: ", dst.shape)
 
-#             src, dst, _ = filter_zero_points(src, dst)
-#             dst, src, _ = filter_zero_points(dst, src)
 
-#             # src =  src / 127.5 - 1
 
-#             num_points_to_sample = 100
+            # print("nocs_estimated: ", nocs_estimated.shape)
+            # print("depth_images: ", depth_images.shape)
 
-#             src_sampled, dst_sampled = sample_point_cloud(src, dst, num_points_to_sample)
+            # nocs_estimated_resized_masked = nocs_estimated_resized_masked.astype(np.float32) / 255
 
-#             pcd_src = create_open3d_point_cloud(src, [0, 0, 1])  # Blue for source
-#             pcd_dst = create_open3d_point_cloud(dst, [1, 0, 0])  # Red for destination
+            # dst = generate_point_cloud_from_depth(depth_images, camera_intrinsics, bboxes).T
+            # src = generate_point_cloud_from_nocs(nocs_estimated_resized_masked).T
 
-#             pcd_src_sampled = create_open3d_point_cloud(src_sampled, [0, 0, 1])  # Blue for source
-#             pcd_dst_sampled = create_open3d_point_cloud(dst_sampled, [1, 0, 0])  # Red for destination
+            # show_pointcloud(dst.T)
+            # show_pointcloud(src.T)
+            # print("src: ", src.shape)
+            # print("dst: ", dst.shape)
 
-#             print("Sampled src shape: ", src_sampled.shape)
-#             print("Sampled dst shape: ", dst_sampled.shape)
+            # src, dst, _ = filter_zero_points(src, dst)
+            # dst, src, _ = filter_zero_points(dst, src)
 
-#             # Populate the parameters
-#             solver_params = teaserpp_python.RobustRegistrationSolver.Params()
-#             solver_params.cbar2 = 1
-#             solver_params.noise_bound = 0.01
-#             solver_params.estimate_scaling = True
-#             solver_params.rotation_estimation_algorithm = (
-#                 teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
-#             )
-#             solver_params.rotation_gnc_factor = 1.4
-#             solver_params.rotation_max_iterations = 100
-#             solver_params.rotation_cost_threshold = 1e-12
+            # src, dst, _ = filter_points_within_limits(src, dst, center=0.5, tolerance=0.05)
 
-#             # Create the TEASER++ solver and solve the registration problem
-#             teaserpp_solver = teaserpp_python.RobustRegistrationSolver(solver_params)
+            # num_points_to_sample = 1000
 
-#             teaserpp_solver.solve(src_sampled, dst_sampled)
+            # src_sampled, dst_sampled = sample_point_cloud(src, dst, num_points_to_sample)
 
-#             # Get the solution
-#             solution = teaserpp_solver.getSolution()
-#             print("Solution is:", solution)
+            # print("src_sampled: ", src_sampled.shape)
+            # print("dst_sampled: ", dst_sampled.shape)
 
-#             # Extract rotation, translation, and scale from the solution
-#             R = solution.rotation
-#             t = solution.translation
-#             s = solution.scale
+            # pcd_src = create_open3d_point_cloud(src, [0, 0, 1])  # Blue for source
+            # pcd_dst = create_open3d_point_cloud(dst, [1, 0, 0])  # Red for destination
 
-#             # Apply the estimated transformation to the source point cloud
-#             src_transformed = s * np.matmul(R, src) + t.reshape(3, 1)
+            # show_pointcloud(src_sampled.T)
+            # show_pointcloud(dst_sampled.T)
 
-#             # Create Open3D point clouds for visualization
-#             #src_transformed = ransac_registration(src_sampled, dst_sampled)
-#             pcd_src_transformed = create_open3d_point_cloud(src_transformed, [0, 1, 0])  # Green
+            # pcd_src_sampled = create_open3d_point_cloud(src_sampled, [0, 0, 1])  # Blue for source
+            # pcd_dst_sampled = create_open3d_point_cloud(dst_sampled, [1, 0, 0])  # Red for destination
 
-#             # Create line set to visualize correspondences
-#             line_set = create_line_set(src_sampled, dst_sampled, [0, 1, 0])  # Green lines for correspondences
+            # print("Sampled src shape: ", src_sampled.shape)
+            # print("Sampled dst shape: ", dst_sampled.shape)
+
+            # # Populate the parameters
+            # solver_params = teaserpp_python.RobustRegistrationSolver.Params()
+            # solver_params.cbar2 = 1
+            # solver_params.noise_bound = config.noise_bound
+            # solver_params.estimate_scaling = True
+            # solver_params.rotation_estimation_algorithm = (
+            #     teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
+            # )
+            # solver_params.rotation_gnc_factor = 1.4
+            # solver_params.rotation_max_iterations = 100
+            # solver_params.rotation_cost_threshold = 1e-12
+
+            # # Create the TEASER++ solver and solve the registration problem
+            # teaserpp_solver = teaserpp_python.RobustRegistrationSolver(solver_params)
+
+            # teaserpp_solver.solve(src_sampled, dst_sampled)
+
+            # # Get the solution
+            # solution = teaserpp_solver.getSolution()
+            # print("Solution is:", solution)
+
+            # # Extract rotation, translation, and scale from the solution
+            # R = solution.rotation
+            # t = solution.translation
+            # s = solution.scale
+
+            # # Apply the estimated transformation to the source point cloud
+            # src_transformed = s * np.matmul(R, src) + t.reshape(3, 1)
+
+            # # Create Open3D point clouds for visualization
+            # #src_transformed = ransac_registration(src_sampled, dst_sampled)
+            # pcd_src_transformed = create_open3d_point_cloud(src_transformed, [0, 1, 0])  # Green
+
+            # # Create line set to visualize correspondences
+            # line_set = create_line_set(src_sampled, dst_sampled, [0, 1, 0])  # Green lines for correspondences
         
-#             # Visualize the point clouds using Open3D
-#             o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed, line_set],
-#                                             window_name="TEASER++ Registration with PLY and NOCS",
-#                                             width=1920, height=1080,
-#                                             left=50, top=50,
-#                                             point_show_normal=False)
+            # # Visualize the point clouds using Open3D
+            # o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed, line_set],
+            #                                 window_name="TEASER++ Registration with PLY and NOCS",
+            #                                 width=1920, height=1080,
+            #                                 left=50, top=50,
+            #                                 point_show_normal=False)
             
-#             estimated_bbox_corners = compute_3d_bounding_box(pcd_src_transformed.points)
-#             print("estimated bbox corners: ", estimated_bbox_corners)
-#             print()
+            # estimated_bbox_corners = compute_3d_bounding_box(pcd_src_transformed.points)
+            # print("estimated bbox corners: ", estimated_bbox_corners)
+            # print()
+
+
 
 #             iou = calculate_3d_iou(estimated_bbox_corners, ground_truth_bbox)
 #             print("IOU BAAAABYYYYY: ", iou)

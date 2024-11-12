@@ -28,39 +28,40 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
                     preload_pointclouds, plot_single_image, apply_rotation, parse_args, load_config, \
                     add_loss
 
-from networks import UnetGeneratorMultiHead
-from diffusion_model import DiffusionNOCS, DiffusionNOCSDino
+from networks import UnetGeneratorMultiHead, UnetGeneratoNOCSHead, UnetGeneratoNOCSBinHead
+import torch
+import torch.nn.functional as F
 
-def transformer_loss(nocs_images, gt_nocs_images, transformations_list):
-    """
-    Calculates the minimum NOCS loss over all transformations for each batch item.
-    
-    Args:
-        nocs_images (torch.Tensor): Batch of NOCS images of shape [batch_size, 3, H, W].
-        gt_nocs_images (torch.Tensor): Ground truth NOCS images of shape [batch_size, 3, H, W].
-        transformations_list (list of lists): Each element in the outer list corresponds to
-                                              a batch item and contains a list of transformation
-                                              matrices as torch tensors.
-    
-    Returns:
-        torch.Tensor: Mean minimum loss across the batch.
-    """
-    batch_size, _, H, W = nocs_images.shape
+def transformer_loss(x_channel_est, y_channel_est, z_channel_est, gt_nocs_images, transformations_list, cross_entropy_loss):
+    batch_size, _, H, W = gt_nocs_images.shape
     min_losses = []
 
     for i in range(batch_size):
-        nocs_image = nocs_images[i]  # Shape: [3, H, W]
         gt_image = gt_nocs_images[i]  # Shape: [3, H, W]
         
         # Collect losses for all transformations
         losses = []
         for transform in transformations_list[i]:
             # Apply transformation to NOCS image
-            nocs_transformed = torch.einsum("ij,jhw->ihw", transform, nocs_image)
-            
-            # Calculate loss with respect to the ground truth
-            loss = torch.nn.functional.l1_loss(nocs_transformed, gt_image, reduction='mean')
-            losses.append(loss)
+            nocs_transformed = torch.einsum("ij,jhw->ihw", transform, gt_image)
+            nocs_transformed = nocs_transformed.unsqueeze(0)
+
+            nocs_images_split = (((nocs_transformed + 1) / 2) * 255).long()
+
+            x_channel_gt = torch.zeros(nocs_transformed.shape[0], 256, config.size, config.size, device=nocs_transformed.device, dtype=torch.float32)
+            y_channel_gt = torch.zeros_like(x_channel_gt)
+            z_channel_gt = torch.zeros_like(x_channel_gt)
+
+            x_channel_gt.scatter_(1, nocs_images_split[:,0].unsqueeze(1), 1.0)
+            y_channel_gt.scatter_(1, nocs_images_split[:,1].unsqueeze(1), 1.0)
+            z_channel_gt.scatter_(1, nocs_images_split[:,2].unsqueeze(1), 1.0)
+
+            loss_x = cross_entropy_loss(x_channel_est[i].unsqueeze(0), x_channel_gt)
+            loss_y = cross_entropy_loss(y_channel_est[i].unsqueeze(0), y_channel_gt)
+            loss_z = cross_entropy_loss(z_channel_est[i].unsqueeze(0), z_channel_gt)
+            regression_nocs_loss = loss_x + loss_y + loss_z
+
+            losses.append(regression_nocs_loss)
         
         # Take the minimum loss over all transformations for this item
         min_loss = torch.min(torch.stack(losses))
@@ -108,13 +109,21 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCSDino( input_nc = 6, output_nc = 3, image_size=128, num_training_steps=1000, num_inference_steps=100)
+    generator = UnetGeneratoNOCSBinHead(input_nc=3, output_nc=256, num_heads=3, num_downs=5, ngf=64)
     generator.to(device)
     print(generator)
+
+    # generator = multidino(input_resolution=config.size, num_bins=config.num_bins, freeze_backbone=config.freeze_backbone)
+    # generator.to(device)
 
     # Optimizer instantiation
     optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
     #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
+
+    class_weights_uvw = torch.ones(256)
+    class_weights_uvw[0] = 0.01
+    cross_entropy_loss = torch.nn.CrossEntropyLoss(weight=class_weights_uvw).to(device)
+
 
     # Instantiate train and val dataset + dataloaders
     train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
@@ -239,16 +248,32 @@ def main(config):
             rotations = [torch.tensor(entry["rotation"], dtype=torch.float32) for entry in infos]
             rotation_gt = torch.stack(rotations).to(device)
 
-            # forward pass through generator
-            #x_logits, y_logits, z_logits, nocs_estimated, masks_estimated, rotation_est = generator(rgb_images_gt)
-            regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt)
+            x_logits, y_logits, z_logits = generator(rgb_images_gt)
+            x_channel = torch.max(x_logits, dim=1)[1] 
+            y_channel = torch.max(y_logits, dim=1)[1] 
+            z_channel = torch.max(z_logits, dim=1)[1] 
+            nocs_estimated = torch.stack([x_channel, y_channel, z_channel], dim=1)
+            nocs_estimated = (nocs_estimated / 127.5) - 1
 
-            # 4.) NOCS self-supervised loss
-            # binary_masks_expanded = binary_masks.expand_as(nocs_estimated)
-            # masked_nocs_estimated = nocs_estimated * binary_masks_expanded
-            # masked_nocs_gt = nocs_images_normalized_gt * binary_masks_expanded
+            nocs_images_split = (((nocs_images_normalized_gt + 1) / 2) * 255).long()
 
-            # masked_nocs_loss = F.mse_loss(masked_nocs_estimated, masked_nocs_gt)
+            x_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device, dtype=torch.float32)
+            x_channel_gt.scatter_(1, nocs_images_split[:,0].unsqueeze(1), 1.0)
+
+            y_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device)
+            y_channel_gt.scatter_(1, nocs_images_split[:,1].unsqueeze(1), 1.0)
+
+            z_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device)
+            z_channel_gt.scatter_(1, nocs_images_split[:,2].unsqueeze(1), 1.0)
+
+            # 3.) NOCS Regression loss for each dimension
+            if config.with_transformer_loss:
+                regression_nocs_loss = transformer_loss(x_logits, y_logits, z_logits, nocs_images_normalized_gt, transformations, cross_entropy_loss)
+            else:
+                loss_x = cross_entropy_loss(x_logits, x_channel_gt)
+                loss_y = cross_entropy_loss(y_logits, y_channel_gt)
+                loss_z = cross_entropy_loss(z_logits, z_channel_gt)
+                regression_nocs_loss = loss_x + loss_y + loss_z
 
             # LOSSES Summation
             loss = 0
@@ -313,8 +338,6 @@ def main(config):
                 running_seg_loss = 0
                 running_rot_loss = 0
                 running_bg_loss = 0
-
-                nocs_estimated = generator.inference(rgb_images_gt)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
                 plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
@@ -391,9 +414,33 @@ def main(config):
                 rotations = [torch.tensor(entry["rotation"], dtype=torch.float32) for entry in infos]
                 rotation_gt = torch.stack(rotations).to(device)
 
-                # forward pass through generator
-                regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt)
-                
+                x_logits, y_logits, z_logits = generator(rgb_images_gt)
+                x_channel = torch.max(x_logits, dim=1)[1] 
+                y_channel = torch.max(y_logits, dim=1)[1] 
+                z_channel = torch.max(z_logits, dim=1)[1] 
+                nocs_estimated = torch.stack([x_channel, y_channel, z_channel], dim=1)
+                nocs_estimated = (nocs_estimated / 127.5) - 1
+
+                nocs_images_split = (((nocs_images_normalized_gt + 1) / 2) * 255).long()
+
+                x_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device)
+                x_channel_gt.scatter_(1, nocs_images_split[:,0].unsqueeze(1), 1.0)
+
+                y_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device)
+                y_channel_gt.scatter_(1, nocs_images_split[:,1].unsqueeze(1), 1.0)
+
+                z_channel_gt = torch.zeros(rgb_images_gt.shape[0], 256, config.size, config.size, device=rgb_images_gt.device)
+                z_channel_gt.scatter_(1, nocs_images_split[:,2].unsqueeze(1), 1.0)
+
+                # 3.) NOCS Regression loss for each dimension
+                if config.with_transformer_loss:
+                    regression_nocs_loss = transformer_loss(x_logits, y_logits, z_logits, nocs_images_normalized_gt, transformations, cross_entropy_loss)
+                else:
+                    loss_x = cross_entropy_loss(x_logits, x_channel_gt)
+                    loss_y = cross_entropy_loss(y_logits, y_channel_gt)
+                    loss_z = cross_entropy_loss(z_logits, z_channel_gt)
+                    regression_nocs_loss = loss_x + loss_y + loss_z
+
                 # LOSSES Summation
                 loss = 0
                 loss += config.w_NOCS_bins * 0
@@ -440,13 +487,12 @@ def main(config):
         print("Time for the validation: {:.4f} seconds".format(elapsed_time_epoch))
         print("Val Loss: {:.4f}".format(avg_loss))
 
-        nocs_estimated = generator.inference(rgb_images_gt)
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
         plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
         
         if epoch % config.save_epoch_interval == 0:
             # Save the entire model
-            torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
+            torch.save(generator, os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
             #torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
 
         # Save loss log to JSON after each epoch
@@ -454,8 +500,6 @@ def main(config):
             json.dump(loss_log, f, indent=4)
 
         epoch += 1
-
-    torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
 
 if __name__ == "__main__":
     args = parse_args()

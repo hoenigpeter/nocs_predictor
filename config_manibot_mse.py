@@ -8,23 +8,13 @@ gpu_id = 0
 
 iter_cnt = 100
 
-#"cam_K": [909.9260796440973, 0.0, 643.5625, 0.0, 907.9168585002319, 349.017181282838, 0.0, 0.0, 1.0
+fx = 605.463134765625
+fy = 604.449951171875
+cx = 322.2218322753906
+cy = 236.83627319335938
 
-fx = 909.9260796440973
-fy = 907.9168585002319
-cx = 643.5625
-cy = 349.017181282838
-
-width = 1280
-height = 720
-
-# fx = 605.463134765625
-# fy = 604.449951171875
-# cx = 322.2218322753906
-# cy = 236.83627319335938
-
-# width = 640
-# height = 480
+width = 640
+height = 480
 
 freeze_backbone = True
 
@@ -34,26 +24,24 @@ val_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
 test_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
 models_root = "/ssd3/datasets_bop/manibot/obj_models_ply_1000"
 
-coco_json_path = "/ssd3/datasets_bop/manibot/test_images_syn/coco_annotations.json"
-test_images_root = "/ssd3/datasets_bop/manibot/test_images_syn"
+coco_json_path = "/ssd3/datasets_bop/manibot/test_images_real/coco_annotations.json"
+test_images_root = "/ssd3/datasets_bop/manibot/test_images_real"
 
 class_name = None
 num_categories = 1
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_manibot_diffusion_dino"
-val_img_dir = "./val_img_manibot_diffusion_dino"
-test_img_dir = "./test_img_manibot_diffusion_dino"
+weight_dir = "./weights_manibot_mse_simple"
+val_img_dir = "./val_img_manibot_mse_simple"
+test_img_dir = "./test_img_manibot_mse_simple"
 
 with_transformer_loss = True
-symmetry_type = 'instance_symmetries' # or 'category_symmetries'
-
-noise_bound = 0.05
+symmetry_type = 'category_symmetries' # or 'category_symmetries'
 
 w_NOCS_bins = 0.0
 w_NOCS_cont = 1.0
 w_NOCS_ss = 0.0
-w_seg = 0.0
+w_seg = 1.0
 w_Rot = 0.0
 w_bg = 0.0
 

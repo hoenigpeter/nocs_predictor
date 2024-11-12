@@ -4,6 +4,128 @@ from torch.nn import init
 import functools
 from torch.optim import lr_scheduler
 
+class UnetGeneratoNOCSHead(nn.Module):
+    """U-Net generator with a shared encoder and multiple decoder heads."""
+    
+    def __init__(self, input_nc, output_nc, num_downs, num_heads=3, ngf=64, num_bins=50, norm_layer=nn.BatchNorm2d, use_dropout=False):
+        """
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images per head
+            num_downs (int)     -- the number of downsamplings in UNet
+            num_heads (int)     -- number of decoder heads
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- whether to use dropout in intermediate layers
+        """
+        super(UnetGeneratoNOCSHead, self).__init__()
+        
+        # Construct the encoder with skip connections
+        self.num_bins = num_bins
+
+        self.encoder = nn.ModuleList()
+        input_nc_curr = input_nc
+        for i in range(num_downs):
+            output_nc_curr = ngf * min(2 ** i, 8)
+            self.encoder.append(UnetEncoderBlock(input_nc_curr, output_nc_curr, norm_layer=norm_layer))
+            input_nc_curr = output_nc_curr
+            
+        # # Construct multiple decoder heads with independent weights
+        # self.decoders = nn.ModuleList([
+        #     UnetDecoder(num_downs, output_nc, ngf, norm_layer, use_dropout)
+        #     for _ in range(num_heads)
+        # ])
+        self.nocs_head = UnetDecoder(num_downs, 3, ngf, norm_layer, use_dropout)
+
+        # self.rotation_head = nn.Sequential(
+        #     nn.Conv2d(3, 64, kernel_size=3, stride=1, padding=1),  # Adjust input channels to 3
+        #     nn.ReLU(),  # Activation for non-linearity
+        #     nn.Conv2d(64, 128, kernel_size=3, stride=1, padding=1),  # More channels for complexity
+        #     nn.ReLU(),
+        #     nn.Conv2d(128, 6, kernel_size=3, stride=1, padding=1),  # Output 6 channels for the 6D rotation
+        #     nn.AdaptiveAvgPool2d((1, 1)),  # Global average pooling to (batch_size, 6, 1, 1)
+        #     nn.Flatten()  # Flatten to shape (batch_size, 6)
+        # )
+
+    def rot6d_to_rotmat(self, x):
+        """Convert 6D rotation representation to 3x3 rotation matrix."""
+        x = x.view(-1, 3, 2)  # Reshape into two 3D vectors
+        a1 = x[:, :, 0]  # First 3D vector
+        a2 = x[:, :, 1]  # Second 3D vector
+
+        # Normalize a1 to get the first basis vector
+        b1 = nn.functional.normalize(a1, dim=1)
+
+        # Make a2 orthogonal to b1
+        b2 = nn.functional.normalize(a2 - (b1 * a2).sum(dim=1, keepdim=True) * b1, dim=1)
+
+        # Compute the third basis vector by taking the cross product
+        b3 = torch.cross(b1, b2, dim=1)
+
+        # Form the rotation matrix
+        rot_mat = torch.stack([b1, b2, b3], dim=-1)  # Shape: (batch_size, 3, 3)
+        return rot_mat
+    
+    def forward(self, x):
+        # Encoder forward pass with skip connections
+        encoder_features = []
+        for layer in self.encoder:
+            x = layer(x)
+            encoder_features.append(x)
+        encoder_features = encoder_features[::-1]  # reverse for correct skip connection order
+        
+        # Pass through each decoder head independently
+        #outputs = [decoder(encoder_features) for decoder in self.decoders]
+
+        nocs_estimated = torch.tanh(self.nocs_head(encoder_features))
+
+        return nocs_estimated
+
+class UnetGeneratoNOCSBinHead(nn.Module):
+    """U-Net generator with a shared encoder and multiple decoder heads."""
+    
+    def __init__(self, input_nc, output_nc, num_downs, num_heads=3, ngf=64, num_bins=50, norm_layer=nn.BatchNorm2d, use_dropout=False):
+        """
+        Parameters:
+            input_nc (int)      -- the number of channels in input images
+            output_nc (int)     -- the number of channels in output images per head
+            num_downs (int)     -- the number of downsamplings in UNet
+            num_heads (int)     -- number of decoder heads
+            ngf (int)           -- the number of filters in the last conv layer
+            norm_layer          -- normalization layer
+            use_dropout (bool)  -- whether to use dropout in intermediate layers
+        """
+        super(UnetGeneratoNOCSBinHead, self).__init__()
+        
+        # Construct the encoder with skip connections
+        self.num_bins = num_bins
+
+        self.encoder = nn.ModuleList()
+        input_nc_curr = input_nc
+        for i in range(num_downs):
+            output_nc_curr = ngf * min(2 ** i, 8)
+            self.encoder.append(UnetEncoderBlock(input_nc_curr, output_nc_curr, norm_layer=norm_layer))
+            input_nc_curr = output_nc_curr
+            
+        self.x_head = UnetDecoder(num_downs, output_nc, ngf, norm_layer, use_dropout)
+        self.y_head = UnetDecoder(num_downs, output_nc, ngf, norm_layer, use_dropout)
+        self.z_head = UnetDecoder(num_downs, output_nc, ngf, norm_layer, use_dropout)
+
+   
+    def forward(self, x):
+        # Encoder forward pass with skip connections
+        encoder_features = []
+        for layer in self.encoder:
+            x = layer(x)
+            encoder_features.append(x)
+        encoder_features = encoder_features[::-1]  # reverse for correct skip connection order
+        
+        x_logits = self.x_head(encoder_features)
+        y_logits = self.y_head(encoder_features)
+        z_logits = self.z_head(encoder_features)
+
+        return x_logits, y_logits, z_logits
+
 class UnetGeneratorMultiHead(nn.Module):
     """U-Net generator with a shared encoder and multiple decoder heads."""
     

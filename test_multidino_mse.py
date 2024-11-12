@@ -400,7 +400,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Load pre-trained model for inference
-    model_path = os.path.join(config.weight_dir, 'generator_epoch_50.pth')
+    model_path = os.path.join(config.weight_dir, 'generator_epoch_95.pth')
     generator = torch.load(model_path, map_location=device)
     generator.to(device)
 
@@ -473,7 +473,7 @@ def main(config):
             # ground_truth_bbox = np.dot(rotations[0], canonical_bbox.T).T + translations[0]
     
             # forward pass through generator
-            x_logits, y_logits, z_logits, nocs_estimated, mask_estimated = generator(rgb_images_gt)
+            nocs_estimated = generator(rgb_images_gt)
             nocs_estimated = ((nocs_estimated + 1 ) /2)
 
             # x_bins = torch.softmax(x_logits, dim=1)  # Softmax over the bin dimension
