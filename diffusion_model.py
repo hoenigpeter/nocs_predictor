@@ -33,7 +33,7 @@ from diffusers import (
     UNet2DModel
 )
 
-from transformers import CLIPTextModel, CLIPTokenizer
+from transformers import CLIPTextModel, CLIPTokenizer, CLIPModel, BartTokenizer, BartModel
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
 from diffusers.optimization import get_scheduler
 from diffusers.training_utils import EMAModel
@@ -179,11 +179,14 @@ class DiffusionNOCSDino(nn.Module):
 
         self.dino_model = AutoModel.from_pretrained('facebook/dinov2-base')
 
+        self.bart_model = BartModel.from_pretrained('facebook/bart-base')
+        self.bart_tokenizer = BartTokenizer.from_pretrained('facebook/bart-base')
+
         self.noise_scheduler = DDPMScheduler(num_train_timesteps=num_training_steps)
         self.num_training_steps = num_training_steps
         self.num_inference_steps = num_inference_steps
 
-    def forward(self, rgb_image, nocs_gt):
+    def forward(self, rgb_image, nocs_gt, obj_names):
         # sample noise
         noise = torch.randn(nocs_gt.shape, dtype=nocs_gt.dtype, device=nocs_gt.device)
         # batch size of noise
@@ -197,10 +200,26 @@ class DiffusionNOCSDino(nn.Module):
 
         latents = torch.cat([rgb_image, noisy_latents], dim=1)
 
+        # DINO Embeddings
         images_resized = F.interpolate(rgb_image, size=(224, 224), mode='bilinear', align_corners=False)
-        cross_attention_features = self.dino_model(images_resized)
+        with torch.no_grad():
+            dino_embeddings = self.dino_model(images_resized)
+        dino_embeddings = dino_embeddings[0]
 
-        model_output = self.model(latents, timesteps, cross_attention_features[0]).sample
+        # BART Language Embeddings
+        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(nocs_gt.device)
+        with torch.no_grad():
+            bart_embeddings = self.bart_model(**tokens)  
+            bart_embeddings = bart_embeddings.last_hidden_state
+
+        # Calculate the repeat factor dynamically
+        repeat_factor = (dino_embeddings.size(1) + bart_embeddings.size(1) - 1) // bart_embeddings.size(1)  # ceil(257 / bart_embeddings.size(1))
+        bart_repeated = bart_embeddings.repeat(1, repeat_factor, 1)  # Extend along sequence length
+        bart_repeated = bart_repeated[:, :dino_embeddings.size(1), :]  # Trim to [1, 257, 768]
+    
+        combined_embeddings = torch.cat((dino_embeddings, bart_repeated), dim=1)
+ 
+        model_output = self.model(latents, timesteps, combined_embeddings).sample
 
         loss = F.mse_loss(model_output.float(), noise.float(), reduction="mean")
 

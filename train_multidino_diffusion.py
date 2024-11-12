@@ -191,15 +191,17 @@ def main(config):
 
             pcs = []
             symmetries = []
+            obj_names = []
 
             for entry in infos:
                 obj_name = entry["obj_name"]
                 obj_cat = entry["category_id"]
-                obj_sym = entry[config.symmetry_type]
+                #obj_sym = entry[config.symmetry_type]
                 
                 gt_points = pointclouds[(str(obj_cat), str(obj_name))]
                 pcs.append(gt_points)
-                if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
+                obj_names.append(obj_name.split('-', 1)[0])
+                #if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
 
             pcs_np = np.array(pcs)
             pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
@@ -241,7 +243,7 @@ def main(config):
 
             # forward pass through generator
             #x_logits, y_logits, z_logits, nocs_estimated, masks_estimated, rotation_est = generator(rgb_images_gt)
-            regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt)
+            regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt, obj_names)
 
             # 4.) NOCS self-supervised loss
             # binary_masks_expanded = binary_masks.expand_as(nocs_estimated)
@@ -314,7 +316,7 @@ def main(config):
                 running_rot_loss = 0
                 running_bg_loss = 0
 
-                nocs_estimated = generator.inference(rgb_images_gt)
+                nocs_estimated = generator.inference(rgb_images_gt, obj_names)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
                 plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
@@ -346,15 +348,17 @@ def main(config):
 
                 pcs = []
                 symmetries = []
+                obj_names = []
 
                 for entry in infos:
                     obj_name = entry["obj_name"]
                     obj_cat = entry["category_id"]
-                    obj_sym = entry[config.symmetry_type]
+                    #obj_sym = entry[config.symmetry_type]
                     
                     gt_points = pointclouds[(str(obj_cat), str(obj_name))]
                     pcs.append(gt_points)
-                    if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
+                    obj_names.append(obj_name.split('-', 1)[0])
+                    #if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
 
                 pcs_np = np.array(pcs)
                 pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
@@ -392,7 +396,7 @@ def main(config):
                 rotation_gt = torch.stack(rotations).to(device)
 
                 # forward pass through generator
-                regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt)
+                regression_nocs_loss = generator(rgb_images_gt, nocs_images_normalized_gt, obj_names)
                 
                 # LOSSES Summation
                 loss = 0
@@ -440,7 +444,7 @@ def main(config):
         print("Time for the validation: {:.4f} seconds".format(elapsed_time_epoch))
         print("Val Loss: {:.4f}".format(avg_loss))
 
-        nocs_estimated = generator.inference(rgb_images_gt)
+        nocs_estimated = generator.inference(rgb_images_gt, obj_names)
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
         plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
         

@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 1
+batch_size = 16
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -29,21 +29,21 @@ height = 720
 freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/manibot/train_nocs_3/{000000..000008}.tar"
-val_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
-test_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
-models_root = "/ssd3/datasets_bop/manibot/obj_models_ply_1000"
+train_data_root = "/ssd3/datasets_bop/housecat6d_nocs_train/scene{01..34}.tar"
+val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
+test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/test_scene{1..5}.tar"
+models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
 
 coco_json_path = "/ssd3/datasets_bop/manibot/test_images_syn/coco_annotations.json"
 test_images_root = "/ssd3/datasets_bop/manibot/test_images_syn"
 
 class_name = None
-num_categories = 1
+num_categories = 10
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_manibot_diffusion_dino"
-val_img_dir = "./val_img_manibot_diffusion_dino"
-test_img_dir = "./test_img_manibot_diffusion_dino"
+weight_dir = "./weights_housecat6d_diffusion_dino"
+val_img_dir = "./val_img_housecat6d_diffusion_dino"
+test_img_dir = "./test_img_housecat6d_diffusion_dino"
 
 with_transformer_loss = True
 symmetry_type = 'instance_symmetries' # or 'category_symmetries'
