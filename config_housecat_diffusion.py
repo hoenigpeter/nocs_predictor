@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 16
+batch_size = 2
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5

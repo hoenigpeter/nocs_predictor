@@ -1,25 +1,6 @@
-import argparse
-import inspect
-import logging
-import math
-import os
-import shutil
-from datetime import timedelta
-from pathlib import Path
-
-import accelerate
-import datasets
 import torch
 import torch.nn.functional as F
 
-from torch.utils.data import Dataset
-
-from accelerate import Accelerator, InitProcessGroupKwargs
-from accelerate.logging import get_logger
-from accelerate.utils import ProjectConfiguration
-from datasets import load_dataset
-from packaging import version
-from torchvision import transforms
 from tqdm.auto import tqdm
 
 import diffusers
@@ -35,21 +16,10 @@ from diffusers import (
 
 from transformers import CLIPTextModel, CLIPTokenizer, CLIPModel, BartTokenizer, BartModel
 from diffusers import DDPMPipeline, DDPMScheduler, UNet2DModel
-from diffusers.optimization import get_scheduler
-from diffusers.training_utils import EMAModel
-from diffusers.utils import check_min_version, is_accelerate_version, is_tensorboard_available, is_wandb_available
-from diffusers.utils.import_utils import is_xformers_available
-from diffusers.models.embeddings import LabelEmbedding
 from transformers import AutoImageProcessor, AutoModel
-
-import matplotlib.pyplot as plt
-import numpy as np
 
 import torch
 import torch.nn as nn
-from torch.nn import init
-import functools
-from torch.optim import lr_scheduler
 
 class DiffusionNOCS(nn.Module):
     """U-Net generator with a shared encoder and multiple decoder heads."""
@@ -200,6 +170,16 @@ class DiffusionNOCSDino(nn.Module):
 
         latents = torch.cat([rgb_image, noisy_latents], dim=1)
 
+        combined_embeddings = self.get_embeddings(rgb_image, obj_names)
+
+        model_output = self.model(latents, timesteps, combined_embeddings).sample
+
+        loss = F.mse_loss(model_output.float(), noise.float(), reduction="mean")
+
+        return loss
+    
+    def get_embeddings(self, rgb_image, obj_names):
+
         # DINO Embeddings
         images_resized = F.interpolate(rgb_image, size=(224, 224), mode='bilinear', align_corners=False)
         with torch.no_grad():
@@ -207,7 +187,7 @@ class DiffusionNOCSDino(nn.Module):
         dino_embeddings = dino_embeddings[0]
 
         # BART Language Embeddings
-        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(nocs_gt.device)
+        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(rgb_image.device)
         with torch.no_grad():
             bart_embeddings = self.bart_model(**tokens)  
             bart_embeddings = bart_embeddings.last_hidden_state
@@ -218,20 +198,15 @@ class DiffusionNOCSDino(nn.Module):
         bart_repeated = bart_repeated[:, :dino_embeddings.size(1), :]  # Trim to [1, 257, 768]
     
         combined_embeddings = torch.cat((dino_embeddings, bart_repeated), dim=1)
- 
-        model_output = self.model(latents, timesteps, combined_embeddings).sample
 
-        loss = F.mse_loss(model_output.float(), noise.float(), reduction="mean")
+        return combined_embeddings
 
-        return loss
-        
-    def inference(self, rgb_image):
+    def inference(self, rgb_image, obj_names):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
         nocs_noise = torch.randn(rgb_image.shape, dtype=rgb_image.dtype, device=rgb_image.device)
 
-        images_resized = F.interpolate(rgb_image, size=(224, 224), mode='bilinear', align_corners=False)
-        cross_attention_features = self.dino_model(images_resized)
+        combined_embeddings = self.get_embeddings(rgb_image, obj_names)
 
         for timestep in tqdm(self.noise_scheduler.timesteps):
 
@@ -240,7 +215,7 @@ class DiffusionNOCSDino(nn.Module):
             )  # this order is important
 
             with torch.no_grad():
-                noisy_residual = self.model(input, timestep, cross_attention_features[0]).sample
+                noisy_residual = self.model(input, timestep, combined_embeddings).sample
             previous_noisy_sample = self.noise_scheduler.step(noisy_residual, timestep, nocs_noise).prev_sample
 
             nocs_noise = previous_noisy_sample
