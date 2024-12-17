@@ -97,7 +97,7 @@ class CustomDataset(Dataset):
             masks.append(torch.tensor(mask, dtype=torch.uint8))
             mask_crops.append(torch.tensor(mask_crop, dtype=torch.uint8))
             metadatas.append(metadata)
-            bboxes.append(torch.tensor(bbox, dtype=torch.int))
+            bboxes.append(bbox)
 
         return {
             "rgb": transforms.ToTensor()(rgb_image),  # For later post-processing
@@ -208,7 +208,7 @@ class COCODataset(Dataset):
             "mask_crop": cropped_mask,
             "rgb": transforms.ToTensor()(image),  # For later post-processing
             "depth": transforms.ToTensor()(depth_image),
-            "bbox": torch.tensor(bbox, dtype=torch.int),
+            "bbox": bbox,
             "mask": torch.tensor(mask, dtype=torch.uint8),
             "metadata": metadata,
             "category_name": category_name,

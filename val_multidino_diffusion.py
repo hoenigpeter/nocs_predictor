@@ -59,12 +59,12 @@ def main(config):
             bboxes = batch['bboxes'][0]
             metadatas = batch['metadatas'][0]
             category_names = batch['category_names'][0]
-            category_ids = np.array(batch['category_ids'])
+            category_ids = np.array(batch['category_ids'][0])
             gts = batch['gts'][0]
             gt_bboxes = gts['gt_bboxes']
-            gt_scales = gts['gt_scales']
+            gt_scales = np.array(gts['gt_scales'])/100
             gt_RTs = gts['gt_RTs']
-            gt_categories = gts['gt_categories']
+            gt_category_ids = np.array(gts['gt_category_ids'])
 
             rgb_np = rgb_images.squeeze().permute(1, 2, 0).cpu().numpy()
 
@@ -72,9 +72,8 @@ def main(config):
             
             pred_scales = []
             pred_RTs = []
-
-            print(len(mask_images))
-            print(len(rgb_crops))
+            pred_scores = []
+            gt_handle_visibility = []
 
             for idx in range(len(rgb_crops)):
                 mask_np = mask_images[idx].squeeze().cpu().numpy()
@@ -86,7 +85,6 @@ def main(config):
                 mask_full_image = mask_full_images[idx].unsqueeze(0)
                 binary_mask_full_images = (mask_full_image > 0).float()
                 binary_mask_full_images = binary_mask_full_images.to(device)
-                print(binary_mask_full_images.shape)
 
                 mask_images_gt = mask_image.float() / 255.0
                 mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
@@ -98,8 +96,6 @@ def main(config):
                 rgb_images = torch.clamp(rgb_cropped.float(), min=0.0, max=255.0).unsqueeze(0)
                 rgb_images = rgb_images.to(device)
 
-                print(binary_mask.shape)
-                print(rgb_images.shape)
                 rgb_images = rgb_images * binary_mask
 
                 rgb_images_gt = (rgb_images.float() / 127.5) - 1
@@ -113,19 +109,17 @@ def main(config):
                 nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadatas[idx])
                 mask_resized = restore_original_bbox_crop((mask_np * 255).astype(np.uint8), metadatas[idx])
 
-                bbox = bboxes[idx].cpu().numpy()
-                print(bbox)
+                bbox = bboxes[idx]
 
                 rgb_nocs_overlay_image = overlay_nocs_on_rgb((rgb_np * 255).astype(np.uint8), nocs_estimated_resized, (mask_resized).astype(np.uint8), bbox)
 
                 # AB HIER WEITER DEBUGGEN -> UMSTELLUNG NEUER DATALOADER!
                 binary_mask = (mask_resized > 0).astype(np.uint8)
                 binary_mask_full_images = (binary_mask_full_images.squeeze(0).squeeze(0).cpu().numpy() > 0).astype(np.uint8)
-                print(binary_mask_full_images.shape)
                 nocs_estimated_resized_masked = nocs_estimated_resized.copy()
                 nocs_estimated_resized_masked[binary_mask == 0] = 0
 
-                depth_images[binary_mask_full_images == 0] = 0
+                #depth_images[binary_mask_full_images == 0] = 0
 
                 rgb_images_gt_np = (((rgb_images_gt + 1) /2)[0].permute(1, 2, 0).cpu().numpy() * 255 ).astype(np.uint8)
 
@@ -154,18 +148,22 @@ def main(config):
                 print(src_sampled.shape)
                 print(dst_sampled.shape)
                 print()
+
                 R, t, s = teaserpp_solve(src_sampled, dst_sampled)
-                pred_RTs = np.eye(4)
-                pred_RTs[:3, 3] = t
-                pred_RTs[:3, :3] = R
+                pred_RT = np.eye(4)
+                pred_RT[:3, 3] = t
+                pred_RT[:3, :3] = R
+                pred_RTs.append(pred_RT)
 
                 src_transformed = s * np.matmul(R, src) + t.reshape(3, 1)
                 pcd_src_transformed = create_open3d_point_cloud(src_transformed, [0, 1, 0])  # Green
 
                 line_set = create_line_set(src_sampled, dst_sampled, [0, 1, 0])  # Green lines for correspondences
-
+                s = np.array([s, s, s])
                 pred_scales.append(s)
-            
+                pred_scores.append(1.0)
+                gt_handle_visibility.append(1)
+
                 # Visualize the point clouds using Open3D
                 # o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed, line_set],
                 #                                 window_name="TEASER++ Registration with PLY and NOCS",
@@ -173,36 +171,47 @@ def main(config):
                 #                                 left=50, top=50,
                 #                                 point_show_normal=False)
                 
-                # o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed],
-                #                                 window_name="TEASER++ Registration with PLY and NOCS",
-                #                                 width=1920, height=1080,
-                #                                 left=50, top=50,
-                #                                 point_show_normal=False)
+                o3d.visualization.draw_geometries([pcd_src, pcd_dst, pcd_src_transformed],
+                                                window_name="TEASER++ Registration with PLY and NOCS",
+                                                width=1920, height=1080,
+                                                left=50, top=50,
+                                                point_show_normal=False)
                 
                 # OKAY WIR MÜSSEN HIER DIE BOUNDING BOXEN BEREITS IM PREPARE SCRIPT BERECHNEN
                 # SELBIGES FÜR DIE GT SCALES
                 # ABER WIR BRAUCHEN DAS MESH DANN NICHT MEHR IN DER compute_degree_cm_mAP funktion, DA WIR KEIN ADD BERECHNEN
 
             result = {}
-            result['image_id'] = 0
-            result['image_path'] = "."
+            #result['image_id'] = 0
+            #result['image_path'] = "."
 
-            result['gt_class_ids'] = category_ids
+            result['gt_class_ids'] = gt_category_ids
             result['gt_bboxes'] = gt_bboxes
             result['gt_RTs'] = gt_RTs            
             result['gt_scales'] = gt_scales
-            result['gt_handle_visibility'] = 0
+            result['gt_handle_visibility'] = gt_handle_visibility
+
 
             result['pred_bboxes'] = bboxes
             result['pred_class_ids'] = category_ids
             result['pred_scales'] = pred_scales
             result['pred_RTs'] = pred_RTs
+            result['pred_scores'] = pred_scores
 
             #result['gt_categories'] = gt_categories
 
             results.append(result)
             
-            aps = compute_degree_cm_mAP(results, gt_categories, "./log",
+            synset_names = ['BG', #0
+                'bottle', #1
+                'bowl', #2
+                'camera', #3
+                'can',  #4
+                'laptop',#5
+                'mug'#6
+                ]
+            
+            aps = compute_degree_cm_mAP(results, synset_names, config.weight_dir,
                                                             degree_thresholds = [5, 10, 15],#range(0, 61, 1), 
                                                             shift_thresholds= [5, 10, 15], #np.linspace(0, 1, 31)*15, 
                                                             iou_3d_thresholds=np.linspace(0, 1, 101),
