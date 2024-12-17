@@ -1,3 +1,5 @@
+# parts of the code from: https://github.com/hughw19/NOCS_CVPR2019/blob/master/detect_eval.py
+
 import sys, os
 
 from torch.utils.data import Dataset, DataLoader
@@ -21,12 +23,11 @@ from torchvision import transforms
 import json
 import imageio
 
-import config
+import teaserpp_python
 
-
-class COCODataset(Dataset):
+class CustomDataset(Dataset):
     def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
-        # Load COCO-style JSON
+
         with open(coco_json_path, 'r') as f:
             self.coco_data = json.load(f)
         
@@ -38,9 +39,124 @@ class COCODataset(Dataset):
 
         self.enlarge_factor = 1.5
 
-        # Parse images and annotations
+        #self.images = {img['id']: img for img in self.coco_data['images']}
+        self.data = self.coco_data['data']
+        self.categories = {cat['id']: cat['name'] for cat in self.coco_data['categories']}
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        image_data = self.data[idx]
+        img_info = image_data['image_id']
+        predictions = image_data['predictions']
+        gts = image_data['gts']
+
+        rgb_filename = image_data['color_file_name']
+        depth_filename = image_data['depth_file_name']
+
+        # rgb_filename = img_info['file_name']
+        # depth_filename = rgb_filename[:-4] + ".png"
+
+        img_path = os.path.join(self.root_dir, rgb_filename)
+        depth_path = os.path.join(self.root_dir, depth_filename)
+
+        rgb_image = Image.open(img_path).convert("RGB")
+        rgb_image = np.array(rgb_image)
+
+        with open(depth_path, 'rb') as f:
+            depth_bytes = f.read()
+        
+        depth_image = imageio.imread(depth_bytes).astype(np.float32) / 1000
+
+        rgb_crops = []
+        mask_crops = []
+        bboxes = []
+        metadatas = []
+        category_names = []
+        category_ids = []
+        masks = []
+
+        for prediction in predictions:
+            # ab hier dann loopy loopes
+            category_names.append(self.categories[prediction['category_id']])
+            category_ids.append(prediction['category_id'])
+
+            bbox = np.array(prediction['bbox'], dtype=int)
+
+            mask = self.decode_segmentation(prediction['segmentation'], image_data['width'], image_data['height'])
+            mask = 1 - mask
+
+            # Apply cropping and preprocessing
+            enlarged_bbox = get_enlarged_bbox(bbox, rgb_image.shape, bbox_scaler=self.enlarge_factor)
+
+            rgb_crop, metadata = crop_and_resize(rgb_image, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.BILINEAR)
+            mask_crop, metadata = crop_and_resize(mask, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.NEAREST)
+
+            rgb_crops.append(torch.tensor(rgb_crop, dtype=torch.uint8))
+            masks.append(torch.tensor(mask, dtype=torch.uint8))
+            mask_crops.append(torch.tensor(mask_crop, dtype=torch.uint8))
+            metadatas.append(metadata)
+            bboxes.append(torch.tensor(bbox, dtype=torch.int))
+
+        return {
+            "rgb": transforms.ToTensor()(rgb_image),  # For later post-processing
+            "depth": transforms.ToTensor()(depth_image),
+            "masks": masks,
+            "rgb_crops": rgb_crops,
+            "mask_crops": mask_crops,
+            "bboxes": bboxes,
+            "metadatas": metadatas,
+            "category_names": category_names,
+            "category_ids": category_ids,
+            "gts": gts,
+        }
+
+    def decode_segmentation(self, rle, width, height):
+        """
+        Decodes COCO-style RLE to a binary mask.
+        
+        :param rle: Dictionary with 'counts' (RLE-encoded values) and 'size' (height, width).
+        :param width: Width of the output binary mask.
+        :param height: Height of the output binary mask.
+        :return: Decoded binary mask as a numpy array.
+        """
+        # Initialize an empty 1D mask with all zeros
+        mask = np.zeros(width * height, dtype=np.uint8)
+
+        # Unroll the RLE counts into mask positions
+        rle_counts = rle['counts']
+        current_position = 0
+
+        # Apply the counts as mask segments
+        for i in range(len(rle_counts)):
+            run_length = rle_counts[i]
+            if i % 2 == 0:
+                # For even indices, set the corresponding pixels to 1 (foreground)
+                mask[current_position:current_position + run_length] = 1
+            # Update position
+            current_position += run_length
+
+        # Reshape the flat mask into the 2D binary mask (height, width) and return
+        return mask.reshape((height, width), order="F")  # Order "F" to match column-wise storage
+    
+class COCODataset(Dataset):
+    def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
+
+        with open(coco_json_path, 'r') as f:
+            self.coco_data = json.load(f)
+        
+        self.root_dir = root_dir
+        self.image_size = image_size
+        self.augment = augment
+        self.center_crop = center_crop
+        self.is_depth = is_depth
+
+        self.enlarge_factor = 1.5
+
         self.images = {img['id']: img for img in self.coco_data['images']}
         self.annotations = self.coco_data['annotations']
+        self.gts = self.coco_data['gts']
         self.categories = {cat['id']: cat['name'] for cat in self.coco_data['categories']}
 
     def __len__(self):
@@ -49,15 +165,24 @@ class COCODataset(Dataset):
     def __getitem__(self, idx):
         annotation = self.annotations[idx]
         img_info = self.images[annotation['image_id']]
+        category_name = self.categories[annotation['category_id']]
+        category_id = annotation['category_id']
+        gts = self.gts[annotation['image_id']]
 
         # rgb_filename = img_info['file_name']
         # depth_filename = "depth" + rgb_filename[3:]
 
-        rgb_filename = img_info['file_name']
-        depth_filename = rgb_filename[:-4] + ".png"
+        # rgb_filename = img_info['file_name']
+        # depth_filename = rgb_filename
 
-        img_path = os.path.join(self.root_dir, img_info['file_name'])
-        depth_path = os.path.join(self.root_dir + "/depth", depth_filename)
+        rgb_filename = img_info['color_file_name']
+        depth_filename = img_info['depth_file_name']
+
+        # rgb_filename = img_info['file_name']
+        # depth_filename = rgb_filename[:-4] + ".png"
+
+        img_path = os.path.join(self.root_dir, rgb_filename)
+        depth_path = os.path.join(self.root_dir, depth_filename)
 
         image = Image.open(img_path).convert("RGB")
         image = np.array(image)
@@ -66,9 +191,6 @@ class COCODataset(Dataset):
             depth_bytes = f.read()
         
         depth_image = imageio.imread(depth_bytes).astype(np.float32) / 1000
-
-        print("rgb shape: ", image.shape)
-        print("depth shape: ", depth_image.shape)
 
         bbox = np.array(annotation['bbox'], dtype=int)
 
@@ -89,6 +211,9 @@ class COCODataset(Dataset):
             "bbox": torch.tensor(bbox, dtype=torch.int),
             "mask": torch.tensor(mask, dtype=torch.uint8),
             "metadata": metadata,
+            "category_name": category_name,
+            "category_id": category_id,
+            "gts": gts,
         }
 
     def decode_segmentation(self, rle, width, height):
@@ -201,6 +326,33 @@ def custom_collate_fn(batch):
         'info': info_batch,
     }
 
+def collate_fn_val(batch):
+    rgb_images = torch.stack([torch.tensor(item['rgb']) for item in batch])
+    depth_images = torch.stack([torch.tensor(item['depth']) for item in batch])
+    mask_images = [(item['masks']) for item in batch]
+
+    rgb_crops = [(item['rgb_crops']) for item in batch]
+    #mask_crops = [(item['mask_crops']) for item in batch]
+    mask_crops = [(item['mask_crops']) for item in batch]
+    bboxes = [(item['bboxes']) for item in batch]
+    metadatas = [(item['metadatas']) for item in batch]
+    category_names = [(item['category_names']) for item in batch]
+    category_ids = [(item['category_ids']) for item in batch]
+    gts = [(item['gts']) for item in batch]
+
+    return {
+        "rgb": rgb_images,
+        "depth": depth_images,
+        "mask": mask_images,
+        "rgb_crops": rgb_crops,
+        "mask_crops": mask_crops,
+        "bboxes": bboxes,
+        "metadatas": metadatas,
+        "category_names": category_names,
+        "category_ids": category_ids,
+        "gts": gts,
+    }
+
 def collate_fn(batch):
     rgb_images = torch.stack([torch.tensor(item['rgb']) for item in batch])
     depth_images = torch.stack([torch.tensor(item['depth']) for item in batch])
@@ -209,6 +361,9 @@ def collate_fn(batch):
     mask_images = torch.stack([torch.tensor(item['mask']) for item in batch])
     bboxes = torch.stack([torch.tensor(item['bbox']) for item in batch])
     metadata = [(item['metadata']) for item in batch]
+    category_name = [(item['category_name']) for item in batch]
+    category_id = [(item['category_id']) for item in batch]
+    gts = [(item['gts']) for item in batch]
 
     return {
         "rgb": rgb_images,
@@ -218,6 +373,9 @@ def collate_fn(batch):
         "mask": mask_images,
         "bbox": bboxes,
         "metadata": metadata,
+        "category_name": category_name,
+        "category_id": category_id,
+        "gts": gts,
     }
 
 def post_process_crop_to_original(crop, original_image, bbox, image_size):
@@ -285,7 +443,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode() \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "visib_mask.png", "nocs.png", "info.json") \
+        .to_tuple("rgb.png", "mask_visib.png", "nocs.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
@@ -300,7 +458,7 @@ def create_webdataset_test(dataset_paths, size=128, shuffle_buffer=1000, augment
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode() \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "visib_mask.png", "nocs.png", "metric_depth.png", "info.json") \
+        .to_tuple("rgb.png", "mask_visib.png", "nocs.png", "metric_depth.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
@@ -614,3 +772,144 @@ def overlay_nocs_on_rgb(full_scale_rgb, nocs_image, mask_image, bbox):
     )
 
     return overlay_image
+
+def paste_mask_on_black_canvas(base_image, mask_image, bbox):
+
+    canvas_shape = base_image.shape
+    if base_image.ndim == 2:  # Single-channel image
+        canvas_shape = (*canvas_shape, 1)  # Add a channel dimension
+    canvas = np.zeros((canvas_shape[0], canvas_shape[1],1), dtype=base_image.dtype)
+
+    print(canvas.shape)
+    bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
+
+    if mask_image.ndim == 2:  # Single-channel mask
+        mask_image = np.expand_dims(mask_image, axis=-1)  # Match dimensions
+
+    # Only update pixels where mask is non-zero
+    canvas[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax] = mask_image
+
+
+    if base_image.ndim == 2:
+        canvas = np.squeeze(canvas, axis=-1)
+
+
+    return canvas
+
+def paste_nocs_on_black_canvas(base_image, mask_image, bbox):
+
+    canvas_shape = base_image.shape
+    canvas = np.zeros((canvas_shape[0], canvas_shape[1],3), dtype=base_image.dtype)
+
+    bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
+
+    canvas[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax] = mask_image
+
+    return canvas
+
+def teaserpp_solve(src, dst):
+    # Populate the parameters
+    solver_params = teaserpp_python.RobustRegistrationSolver.Params()
+    solver_params.cbar2 = 1
+    solver_params.noise_bound = 0.01
+    solver_params.estimate_scaling = True
+    solver_params.rotation_estimation_algorithm = (
+        teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
+    )
+    solver_params.rotation_gnc_factor = 1.4
+    solver_params.rotation_max_iterations = 100
+    solver_params.rotation_cost_threshold = 1e-12
+
+    # Create the TEASER++ solver and solve the registration problem
+    teaserpp_solver = teaserpp_python.RobustRegistrationSolver(solver_params)
+
+    teaserpp_solver.solve(src, dst)
+
+    # Get the solution
+    solution = teaserpp_solver.getSolution()
+    print("Solution is:", solution)
+
+    # Extract rotation, translation, and scale from the solution
+    R = solution.rotation
+    t = solution.translation
+    s = solution.scale
+
+    return R, t, s
+
+def backproject(depth, intrinsics, instance_mask=None):
+    intrinsics = np.array([[intrinsics['fx'], 0, intrinsics['cx']], [0, intrinsics['fy'], intrinsics['cy']],[0,0,1]])
+    intrinsics_inv = np.linalg.inv(intrinsics)
+
+    #non_zero_mask = np.logical_and(depth > 0, depth < 5000)
+    non_zero_mask = (depth > 0)
+
+    if instance_mask is not None:
+        instance_mask = np.squeeze(instance_mask)
+        instance_mask = np.squeeze(instance_mask)
+        final_instance_mask = np.logical_and(instance_mask, non_zero_mask)
+    else:
+        final_instance_mask = np.ones_like(depth, dtype=bool)
+
+    idxs = np.where(final_instance_mask)
+    grid = np.array([idxs[1], idxs[0]])
+
+    length = grid.shape[1]
+    ones = np.ones([1, length])
+    uv_grid = np.concatenate((grid, ones), axis=0) # [3, num_pixel]
+
+    xyz = intrinsics_inv @ uv_grid # [3, num_pixel]
+    xyz = np.transpose(xyz) #[num_pixel, 3]
+
+    z = depth[idxs[0], idxs[1]]
+    pts = xyz * z[:, np.newaxis]/xyz[:, -1:]
+    pts[:, 0] = -pts[:, 0]
+    pts[:, 1] = -pts[:, 1]
+
+    return pts, idxs
+
+def sample_point_cloud(src, dst, num_samples):
+    if src.shape[1] < num_samples:
+        raise ValueError("The number of samples exceeds the number of available points.")
+    
+    # Randomly choose indices to sample
+    indices = np.random.choice(src.shape[1], num_samples, replace=False)
+    
+    # Return the sampled points
+    return src[:, indices], dst[:, indices]
+
+def create_line_set(src_points, dst_points, color=[0, 1, 0]):
+    # Convert src_points and dst_points to numpy arrays and ensure they are float64
+    src_points = np.asarray(src_points, dtype=np.float64).T
+    dst_points = np.asarray(dst_points, dtype=np.float64).T
+    
+    # Check if shapes are correct
+    if src_points.shape[1] != 3 or dst_points.shape[1] != 3:
+        raise ValueError("Points must have a shape of (N, 3)")
+    
+    # Create lines connecting each pair of corresponding points
+    lines = [[i, i + len(src_points)] for i in range(len(src_points))]
+    
+    # Create Open3D LineSet object
+    line_set = o3d.geometry.LineSet()
+    
+    # Concatenate the points and set the points and lines
+    all_points = np.concatenate((src_points, dst_points), axis=0)
+    line_set.points = o3d.utility.Vector3dVector(all_points)
+    line_set.lines = o3d.utility.Vector2iVector(lines)
+    
+    # Set the color for the lines
+    colors = [color] * len(lines)
+    line_set.colors = o3d.utility.Vector3dVector(colors)
+    
+    return line_set
+
+def create_open3d_point_cloud(points, color):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points.T)
+    pcd.paint_uniform_color(color)
+    return pcd
+
+def show_pointcloud(points):
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(points)
+    o3d.visualization.draw_geometries([pcd])

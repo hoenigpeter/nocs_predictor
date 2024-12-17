@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 2
+batch_size = 16
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -8,23 +8,13 @@ gpu_id = 0
 
 iter_cnt = 100
 
-#"cam_K": [909.9260796440973, 0.0, 643.5625, 0.0, 907.9168585002319, 349.017181282838, 0.0, 0.0, 1.0
+fx = 705.4699707031250000
+fy = 703.0218505859375000
+cx = 554.1227923106198432
+cy = 432.4074733765810379
 
-fx = 909.9260796440973
-fy = 907.9168585002319
-cx = 643.5625
-cy = 349.017181282838
-
-width = 1280
-height = 720
-
-# fx = 605.463134765625
-# fy = 604.449951171875
-# cx = 322.2218322753906
-# cy = 236.83627319335938
-
-# width = 640
-# height = 480
+width = 1096
+height = 852
 
 freeze_backbone = True
 
@@ -34,16 +24,17 @@ val_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/val_scene{1..2}.tar"
 test_data_root = "/ssd3/datasets_bop/housecat6d_nocs_val/test_scene{1..5}.tar"
 models_root = "/ssd3/datasets_bop/housecat6d/obj_models_ply_1000"
 
-coco_json_path = "/ssd3/datasets_bop/manibot/test_images_syn/coco_annotations.json"
-test_images_root = "/ssd3/datasets_bop/manibot/test_images_syn"
+coco_json_path = "/ssd3/datasets_bop/housecat6d_coco_test_1/coco_annotations.json"
+test_images_root = "/ssd3/datasets_bop/housecat6d_coco_test_1"
 
 class_name = None
 num_categories = 10
+num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_housecat6d_diffusion_dino"
-val_img_dir = "./val_img_housecat6d_diffusion_dino"
-test_img_dir = "./test_img_housecat6d_diffusion_dino"
+weight_dir = "./weights_housecat6d_diffusion_dino_bart"
+val_img_dir = "./val_img_housecat6d_diffusion_dino_bart"
+test_img_dir = "./test_img_housecat6d_diffusion_dino_bart"
 
 with_transformer_loss = True
 symmetry_type = 'instance_symmetries' # or 'category_symmetries'

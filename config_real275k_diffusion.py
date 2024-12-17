@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 1
+batch_size = 16
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -10,40 +10,37 @@ iter_cnt = 100
 
 #"cam_K": [909.9260796440973, 0.0, 643.5625, 0.0, 907.9168585002319, 349.017181282838, 0.0, 0.0, 1.0
 
-fx = 909.9260796440973
-fy = 907.9168585002319
-cx = 643.5625
-cy = 349.017181282838
+#For the real data: [[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]]
 
-width = 1280
-height = 720
+#For the synthetic data: [[577.5, 0, 319.5], [0., 577.5, 239.5], [0., 0., 1.]]
 
-# fx = 605.463134765625
-# fy = 604.449951171875
-# cx = 322.2218322753906
-# cy = 236.83627319335938
+fx = 591.0125
+fy = 590.16775
+cx = 322.525
+cy = 244.11084
 
-# width = 640
-# height = 480
+width = 640
+height = 480
 
 freeze_backbone = True
 
 # Data Paths
-train_data_root = "/ssd3/datasets_bop/manibot/train_nocs_3/{000000..000008}.tar"
-val_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
-test_data_root = "/ssd3/datasets_bop/manibot/test_nocs/000009.tar"
-models_root = "/ssd3/datasets_bop/manibot/obj_models_ply_1000"
+train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_train/scene_{1..7}.tar"
+val_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val/scene_1.tar"
+test_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_test/scene_{2..6}.tar"
+models_root = None
 
-coco_json_path = "/ssd3/datasets_bop/manibot/test_images_zed_cart_1/coco_annotations.json"
-test_images_root = "/ssd3/datasets_bop/manibot/test_images_zed_cart_1"
+coco_json_path = "/ssd3/datasets_bop/camera_real275_datasets/real275_test_coco_1/coco_annotations.json"
+test_images_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_test_coco_1"
 
 class_name = None
-num_categories = 1
+num_categories = 6
+num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_manibot_diffusion_dino"
-val_img_dir = "./val_img_manibot_diffusion_dino"
-test_img_dir = "./test_img_manibot_diffusion_dino"
+weight_dir = "./weights_real275_diffusion_dino_bart"
+val_img_dir = "./val_img_real275_diffusion_dino_bart"
+test_img_dir = "./test_img_real275_diffusion_dino_bart"
 
 with_transformer_loss = True
 symmetry_type = 'instance_symmetries' # or 'category_symmetries'

@@ -29,7 +29,7 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
                     add_loss
 
 from networks import UnetGeneratorMultiHead
-from diffusion_model import DiffusionNOCS, DiffusionNOCSDino
+from diffusion_model import DiffusionNOCS, DiffusionNOCSDino, DiffusionNOCSDinoBART
 
 def transformer_loss(nocs_images, gt_nocs_images, transformations_list):
     """
@@ -108,7 +108,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCSDino( input_nc = 6, output_nc = 3, image_size=128, num_training_steps=1000, num_inference_steps=100)
+    generator = DiffusionNOCSDinoBART( input_nc = 6, output_nc = 3, image_size=128, num_training_steps=1000, num_inference_steps=100)
     generator.to(device)
     print(generator)
 
@@ -127,7 +127,8 @@ def main(config):
             val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
 
-    pointclouds = preload_pointclouds(config.models_root, num_categories=config.num_categories)
+    if config.models_root is not None:
+        pointclouds = preload_pointclouds(config.models_root, num_categories=config.num_categories)
 
     # train_dataloader = DataLoader(
     #     train_dataset, 
@@ -198,14 +199,16 @@ def main(config):
                 obj_cat = entry["category_id"]
                 #obj_sym = entry[config.symmetry_type]
                 
-                gt_points = pointclouds[(str(obj_cat), str(obj_name))]
-                pcs.append(gt_points)
+                if config.models_root is not None:
+                    gt_points = pointclouds[(str(obj_cat), str(obj_name))]
+                    pcs.append(gt_points)
                 obj_names.append(obj_name.split('-', 1)[0])
                 #if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
 
-            pcs_np = np.array(pcs)
-            pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
-            pcs_gt = pcs_gt.to(device)
+            if config.models_root is not None:
+                pcs_np = np.array(pcs)
+                pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+                pcs_gt = pcs_gt.to(device)
 
             #print(symmetries)
             if config.with_transformer_loss == True: transformations = generate_symmetry_transformations(symmetries, device)
@@ -229,9 +232,9 @@ def main(config):
 
             # NOCS processing
             nocs_images_float = nocs_images.float()
-            # Step 1: Adjust background pixels (where all three channels are 127)
-            background_mask = (nocs_images_float[:, :, :, 0] == 127) & (nocs_images_float[:, :, :, 1] == 127) & (nocs_images_float[:, :, :, 2] == 127)
-            nocs_images_float[background_mask] += 0.5  # Add 0.5 to the background pixels
+            # # Step 1: Adjust background pixels (where all three channels are 127)
+            # background_mask = (nocs_images_float[:, :, :, 0] == 127) & (nocs_images_float[:, :, :, 1] == 127) & (nocs_images_float[:, :, :, 2] == 127)
+            # nocs_images_float[background_mask] += 0.5  # Add 0.5 to the background pixels
 
             nocs_images_normalized = (nocs_images_float / 127.5) - 1
             nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
@@ -354,15 +357,18 @@ def main(config):
                     obj_name = entry["obj_name"]
                     obj_cat = entry["category_id"]
                     #obj_sym = entry[config.symmetry_type]
-                    
-                    gt_points = pointclouds[(str(obj_cat), str(obj_name))]
-                    pcs.append(gt_points)
+
+                    if config.models_root is not None:
+                        gt_points = pointclouds[(str(obj_cat), str(obj_name))]
+                        pcs.append(gt_points)
+
                     obj_names.append(obj_name.split('-', 1)[0])
                     #if config.with_transformer_loss == True: symmetries.append(np.array(obj_sym))
 
-                pcs_np = np.array(pcs)
-                pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
-                pcs_gt = pcs_gt.to(device)
+                if config.models_root is not None:
+                    pcs_np = np.array(pcs)
+                    pcs_gt = torch.tensor(pcs_np, dtype=torch.float32)
+                    pcs_gt = pcs_gt.to(device)
                 
                 # Normalize mask to be binary (0 or 1)
                 binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
@@ -383,9 +389,9 @@ def main(config):
 
                 # NOCS processing
                 nocs_images_float = nocs_images.float()
-                # Step 1: Adjust background pixels (where all three channels are 127)
-                background_mask = (nocs_images_float[:, :, :, 0] == 127) & (nocs_images_float[:, :, :, 1] == 127) & (nocs_images_float[:, :, :, 2] == 127)
-                nocs_images_float[background_mask] += 0.5  # Add 0.5 to the background pixels
+                # # Step 1: Adjust background pixels (where all three channels are 127)
+                # background_mask = (nocs_images_float[:, :, :, 0] == 127) & (nocs_images_float[:, :, :, 1] == 127) & (nocs_images_float[:, :, :, 2] == 127)
+                # nocs_images_float[background_mask] += 0.5  # Add 0.5 to the background pixels
 
                 nocs_images_normalized = (nocs_images_float / 127.5) - 1
                 nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
