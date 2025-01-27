@@ -11,14 +11,6 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import Dataset, DataLoader
-from torch.utils.tensorboard import SummaryWriter
-import pytorch3d
-from pytorch3d.transforms import matrix_to_quaternion, quaternion_to_matrix
-from multidino_model import MultiDINO as multidino
-from transformers import CLIPProcessor, CLIPModel
-import open3d as o3d
-from torch.optim.lr_scheduler import CosineAnnealingLR
 
 import json
 import webdataset as wds
@@ -108,7 +100,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCSDinoBART( input_nc = 6, output_nc = 3, image_size=128, num_training_steps=1000, num_inference_steps=100)
+    generator = DiffusionNOCSDinoBART(input_nc = 6, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     generator.to(device)
     print(generator)
 
@@ -117,8 +109,8 @@ def main(config):
     #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
 
     # Instantiate train and val dataset + dataloaders
-    train_dataset = create_webdataset(config.train_data_root, config.size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
-    val_dataset = create_webdataset(config.val_data_root, config.size, config.shuffle_buffer, augment=False, center_crop=config.center_crop, class_name=config.class_name)
+    train_dataset = create_webdataset(config.train_data_root, config.image_size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
+    val_dataset = create_webdataset(config.val_data_root, config.image_size, config.shuffle_buffer, augment=False, center_crop=config.center_crop, class_name=config.class_name)
 
     train_dataloader = wds.WebLoader(
         train_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.train_num_workers, drop_last=True, collate_fn=custom_collate_fn,
@@ -211,7 +203,7 @@ def main(config):
                 pcs_gt = pcs_gt.to(device)
 
             #print(symmetries)
-            if config.with_transformer_loss == True: transformations = generate_symmetry_transformations(symmetries, device)
+            #if config.with_transformer_loss == True: transformations = generate_symmetry_transformations(symmetries, device)
 
             # Normalize mask to be binary (0 or 1)
             binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
@@ -322,7 +314,7 @@ def main(config):
                 nocs_estimated = generator.inference(rgb_images_gt, obj_names)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
-                plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
+                plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt, config)
         
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
@@ -452,7 +444,7 @@ def main(config):
 
         nocs_estimated = generator.inference(rgb_images_gt, obj_names)
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
-        plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt)
+        plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, mask_images_gt, mask_images_gt, rotation_gt, config)
         
         if epoch % config.save_epoch_interval == 0:
             # Save the entire model

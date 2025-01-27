@@ -205,3 +205,6 @@ val_img_1_roxanne/
 val_img_cluster/
 val_img_manibot/
 weights_1/
+
+plys_camera_diffusion_dino_bart_all/
+plys_camera_diffusion_dino_bart/

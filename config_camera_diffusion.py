@@ -35,17 +35,20 @@ test_images_root = "/ssd3/real_camera_dataset/real_test"
 
 class_name = None
 num_categories = 6
-num_points_to_sample = 500
+num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
 weight_dir = "./weights_camera_diffusion_dino_bart"
 val_img_dir = "./val_img_camera_diffusion_dino_bart"
 test_img_dir = "./test_img_camera_diffusion_dino_bart"
+ply_output_dir = "./plys_camera_diffusion_dino_bart"
 
 with_transformer_loss = True
 symmetry_type = 'instance_symmetries' # or 'category_symmetries'
 
-noise_bound = 0.01
+noise_bound = 0.02  # 0.01
+rotation_max_iterations = 2000
+rotation_cost_threshold = 1e-12  # 1e-12
 
 w_NOCS_bins = 0.0
 w_NOCS_cont = 1.0
@@ -55,8 +58,12 @@ w_Rot = 0.0
 w_bg = 0.0
 
 # Input Data Settings
-size = 128
-num_bins = 50
+image_size = 256
+
+num_training_steps = 1000
+num_inference_steps = 100
+
+weight_file = 'generator_epoch_15.pth'
 
 # Optimizer Settings
 lr = 1e-4

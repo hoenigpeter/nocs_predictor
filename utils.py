@@ -23,6 +23,8 @@ from torchvision import transforms
 import json
 import imageio
 
+from skimage.transform import SimilarityTransform
+
 import teaserpp_python
 
 class CustomDataset(Dataset):
@@ -48,7 +50,9 @@ class CustomDataset(Dataset):
 
     def __getitem__(self, idx):
         image_data = self.data[idx]
-        img_info = image_data['image_id']
+        frame_id = image_data['frame_id']
+        scene_id = image_data['scene_id']
+
         predictions = image_data['predictions']
         gts = image_data['gts']
 
@@ -92,7 +96,7 @@ class CustomDataset(Dataset):
 
             rgb_crop, metadata = crop_and_resize(rgb_image, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.BILINEAR)
             mask_crop, metadata = crop_and_resize(mask, enlarged_bbox, bbox, target_size=self.image_size, interpolation=Image.NEAREST)
-
+            
             rgb_crops.append(torch.tensor(rgb_crop, dtype=torch.uint8))
             masks.append(torch.tensor(mask, dtype=torch.uint8))
             mask_crops.append(torch.tensor(mask_crop, dtype=torch.uint8))
@@ -100,6 +104,8 @@ class CustomDataset(Dataset):
             bboxes.append(bbox)
 
         return {
+            "frame_id": frame_id,
+            "scene_id": scene_id,
             "rgb": transforms.ToTensor()(rgb_image),  # For later post-processing
             "depth": transforms.ToTensor()(depth_image),
             "masks": masks,
@@ -109,6 +115,7 @@ class CustomDataset(Dataset):
             "metadatas": metadatas,
             "category_names": category_names,
             "category_ids": category_ids,
+
             "gts": gts,
         }
 
@@ -304,14 +311,10 @@ def preload_pointclouds(models_root, num_categories):
                 
     return pointclouds
 
-def make_log_dirs(weight_dir, val_img_dir):
-    weight_dir = weight_dir
-    if not(os.path.exists(weight_dir)):
-            os.makedirs(weight_dir)
-
-    val_img_dir = val_img_dir
-    if not(os.path.exists(val_img_dir)):
-        os.makedirs(val_img_dir)
+def make_log_dirs(dir_list):
+    for directory in dir_list:
+        if not os.path.exists(directory):
+            os.makedirs(directory)
 
 def custom_collate_fn(batch):
     rgb_batch = torch.stack([torch.tensor(item[0]) for item in batch])
@@ -327,10 +330,11 @@ def custom_collate_fn(batch):
     }
 
 def collate_fn_val(batch):
+    frame_id = [(item['frame_id']) for item in batch]
+    scene_id = [(item['scene_id']) for item in batch]
     rgb_images = torch.stack([torch.tensor(item['rgb']) for item in batch])
     depth_images = torch.stack([torch.tensor(item['depth']) for item in batch])
     mask_images = [(item['masks']) for item in batch]
-
     rgb_crops = [(item['rgb_crops']) for item in batch]
     #mask_crops = [(item['mask_crops']) for item in batch]
     mask_crops = [(item['mask_crops']) for item in batch]
@@ -341,6 +345,8 @@ def collate_fn_val(batch):
     gts = [(item['gts']) for item in batch]
 
     return {
+        "frame_id": frame_id,
+        "scene_id": scene_id,
         "rgb": rgb_images,
         "depth": depth_images,
         "mask": mask_images,
@@ -540,7 +546,7 @@ def setup_environment(gpu_id):
         gpu_id = ''
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
-def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, mask_images_binary, mask_images_gt, rot_estimated_R):
+def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, mask_images_binary, mask_images_gt, rot_estimated_R, config):
     # Print value ranges for each input
     # print(f"RGB Images - Min: {torch.min(rgb_images):.4f}, Max: {torch.max(rgb_images):.4f}")
     # print(f"NOCS GT - Min: {torch.min(nocs_images_normalized_gt):.4f}, Max: {torch.max(nocs_images_normalized_gt):.4f}")
@@ -799,7 +805,7 @@ def paste_mask_on_black_canvas(base_image, mask_image, bbox):
 def paste_nocs_on_black_canvas(base_image, mask_image, bbox):
 
     canvas_shape = base_image.shape
-    canvas = np.zeros((canvas_shape[0], canvas_shape[1],3), dtype=base_image.dtype)
+    canvas = np.zeros((canvas_shape[0], canvas_shape[1], 3), dtype=base_image.dtype)
 
     bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
 
@@ -807,18 +813,38 @@ def paste_nocs_on_black_canvas(base_image, mask_image, bbox):
 
     return canvas
 
-def teaserpp_solve(src, dst):
+def combine_images_overlapping(images):
+    if not images:
+        raise ValueError("The list of images is empty.")
+    
+    # Ensure all images have the same shape
+    img_height, img_width, img_channels = images[0].shape
+    for img in images:
+        if img.shape != (img_height, img_width, img_channels):
+            raise ValueError("All images must have the same dimensions.")
+    
+    # Create a blank black canvas
+    combined_image = np.zeros_like(images[0], dtype=np.uint8)
+    
+    # Overlay images by copying non-black pixels
+    for img in images:
+        mask = np.any(img != [0, 0, 0], axis=-1)  # Find where the image is not black
+        combined_image[mask] = img[mask]
+    
+    return combined_image
+
+def teaserpp_solve(src, dst, config):
     # Populate the parameters
     solver_params = teaserpp_python.RobustRegistrationSolver.Params()
     solver_params.cbar2 = 1
-    solver_params.noise_bound = 0.01
+    solver_params.noise_bound = config.noise_bound
     solver_params.estimate_scaling = True
     solver_params.rotation_estimation_algorithm = (
         teaserpp_python.RobustRegistrationSolver.ROTATION_ESTIMATION_ALGORITHM.GNC_TLS
     )
     solver_params.rotation_gnc_factor = 1.4
-    solver_params.rotation_max_iterations = 100
-    solver_params.rotation_cost_threshold = 1e-12
+    solver_params.rotation_max_iterations = config.rotation_max_iterations
+    solver_params.rotation_cost_threshold = config.rotation_cost_threshold
 
     # Create the TEASER++ solver and solve the registration problem
     teaserpp_solver = teaserpp_python.RobustRegistrationSolver(solver_params)
@@ -844,7 +870,6 @@ def backproject(depth, intrinsics, instance_mask=None):
     non_zero_mask = (depth > 0)
 
     if instance_mask is not None:
-        instance_mask = np.squeeze(instance_mask)
         instance_mask = np.squeeze(instance_mask)
         final_instance_mask = np.logical_and(instance_mask, non_zero_mask)
     else:
@@ -909,7 +934,46 @@ def create_open3d_point_cloud(points, color):
     pcd.paint_uniform_color(color)
     return pcd
 
-def show_pointcloud(points):
+def show_pointcloud(points, axis_size=1.0):
     pcd = o3d.geometry.PointCloud()
     pcd.points = o3d.utility.Vector3dVector(points)
-    o3d.visualization.draw_geometries([pcd])
+    axis = o3d.geometry.TriangleMesh.create_coordinate_frame(size=axis_size, origin=[0, 0, 0])
+    o3d.visualization.draw_geometries([pcd, axis])
+
+def filter_points(src, dst, filter_value=0, tolerance=1/255):
+    mask = ~(np.max(np.abs(src - filter_value), axis=0) <= tolerance)
+    indices_removed = np.where(~mask)[0]
+    src_filtered = src[:, mask]
+    dst_filtered = dst[:, mask]
+    
+    return src_filtered, dst_filtered, indices_removed
+
+def rotate_transform_matrix_180_z(transform_matrix):
+    rotation_matrix_180_z = np.array([
+        [-1, 0, 0],
+        [0, -1, 0],
+        [0, 0, 1]
+    ])
+
+    rotation_part = transform_matrix[:3, :3]
+    translation_part = transform_matrix[:3, 3]
+
+    new_rotation = np.dot(rotation_matrix_180_z, rotation_part)
+
+    new_translation = np.dot(rotation_matrix_180_z, translation_part)
+
+    transformed_matrix = np.eye(4)
+    transformed_matrix[:3, :3] = new_rotation
+    transformed_matrix[:3, 3] = new_translation
+    
+    return transformed_matrix
+
+def remove_duplicate_pixels(img_array):
+    processed_array = np.zeros_like(img_array)
+    
+    flat_array = img_array.reshape(-1, 3)
+    _, unique_indices = np.unique(flat_array, axis=0, return_index=True)
+
+    processed_array.reshape(-1, 3)[unique_indices] = flat_array[unique_indices]
+    
+    return processed_array

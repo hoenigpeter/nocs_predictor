@@ -1708,7 +1708,9 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
         if len(gt_class_ids) == 0 and len(pred_class_ids) == 0:
             continue
 
+        print(num_classes)
         for cls_id in range(1, num_classes):
+
             # get gt and predictions in this class
             cls_gt_class_ids = gt_class_ids[gt_class_ids==cls_id] if len(gt_class_ids) else np.zeros(0)
             cls_gt_scales = gt_scales[gt_class_ids==cls_id] if len(gt_class_ids) else np.zeros((0, 3))
@@ -1718,6 +1720,13 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
             cls_pred_scores = pred_scores[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros(0)
             cls_pred_RTs = pred_RTs[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros((0, 4, 4))
             cls_pred_scales = pred_scales[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros((0, 3))
+
+            # print("gt_RTs: ", gt_RTs.shape)
+            # print("pred_RTs: ", pred_RTs.shape)
+            # print("gt_class_ids: ", gt_class_ids.shape)
+            # print("pred_class_ids: ", pred_class_ids.shape)
+            # print("gt_class_ids: ", gt_class_ids)
+            # print("pred_class_ids: ", pred_class_ids)
 
             # print("cls_gt_class_ids: ", cls_gt_class_ids)
             # print("cls_gt_scales: ", cls_gt_scales)
@@ -1754,8 +1763,7 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
             #     continue
 
             # calculate the overlap between each gt instance and pred instance
-            print(cls_id)
-            print(synset_names[cls_id])
+
             if synset_names[cls_id] != 'mug':
                 cls_gt_handle_visibility = np.ones_like(cls_gt_class_ids)
             else:
@@ -1764,10 +1772,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
             iou_cls_gt_match, iou_cls_pred_match, _, iou_pred_indices = compute_3d_matches(cls_gt_class_ids, cls_gt_RTs, cls_gt_scales, cls_gt_handle_visibility, synset_names,
                                                                                            cls_pred_bboxes, cls_pred_class_ids, cls_pred_scores, cls_pred_RTs, cls_pred_scales,
                                                                                            iou_thres_list)
-            print("iou_cls_gt_match: ", len(iou_cls_gt_match))
-            print("iou_cls_pred_match: ", len(iou_cls_pred_match))
-            print("iou_pred_indices: ",  iou_pred_indices)
-            print()
 
             if len(iou_pred_indices):
                 cls_pred_class_ids = cls_pred_class_ids[iou_pred_indices]
@@ -1785,7 +1789,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
                 thres_ind = list(iou_thres_list).index(iou_pose_thres)
 
                 iou_thres_pred_match = iou_cls_pred_match[thres_ind, :]
-
                 
                 cls_pred_class_ids = cls_pred_class_ids[iou_thres_pred_match > -1] if len(iou_thres_pred_match) > 0 else np.zeros(0)
                 cls_pred_RTs = cls_pred_RTs[iou_thres_pred_match > -1] if len(iou_thres_pred_match) > 0 else np.zeros((0, 4, 4))
@@ -1818,8 +1821,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
             pose_pred_scores_all[cls_id]  = np.concatenate((pose_pred_scores_all[cls_id], cls_pred_scores_tile), axis=-1)
             assert pose_pred_scores_all[cls_id].shape[2] == pose_pred_matches_all[cls_id].shape[2], '{} vs. {}'.format(pose_pred_scores_all[cls_id].shape, pose_pred_matches_all[cls_id].shape)
             pose_gt_matches_all[cls_id] = np.concatenate((pose_gt_matches_all[cls_id], pose_cls_gt_match), axis=-1)
-
-    
     
     # draw iou 3d AP vs. iou thresholds
     fig_iou = plt.figure()
@@ -1834,11 +1835,11 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
     iou_dict['thres_list'] = iou_thres_list
     for cls_id in range(1, num_classes):
         class_name = synset_names[cls_id]
-        print(class_name)
         for s, iou_thres in enumerate(iou_thres_list):
             iou_3d_aps[cls_id, s] = compute_ap_from_matches_scores(iou_pred_matches_all[cls_id][s, :],
                                                                    iou_pred_scores_all[cls_id][s, :],
-                                                                   iou_gt_matches_all[cls_id][s, :])    
+                                                                   iou_gt_matches_all[cls_id][s, :]) 
+
         ax_iou.plot(iou_thres_list, iou_3d_aps[cls_id, :], label=class_name)
         
     iou_3d_aps[-1, :] = np.mean(iou_3d_aps[1:-1, :], axis=0)
@@ -1884,7 +1885,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
 
     for cls_id in range(1, num_classes):
         class_name = synset_names[cls_id]
-        print(class_name)
         # print(np.amin(aps[i, :, :]), np.amax(aps[i, :, :]))
     
         #ap_image = cv2.resize(pose_aps[cls_id, :, :]*255, (320, 320), interpolation = cv2.INTER_LINEAR)
@@ -1926,7 +1926,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
     plt.xlabel('translation/cm')
     for cls_id in range(1, num_classes):
         class_name = synset_names[cls_id]
-        print(class_name)
         ax_rot.plot(shift_thres_list[:-1], pose_aps[cls_id, -1, :-1], label=class_name)
     
     ax_rot.plot(shift_thres_list[:-1], pose_aps[-1, -1, :-1], label='mean')

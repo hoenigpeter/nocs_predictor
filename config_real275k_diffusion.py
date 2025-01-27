@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 16
+batch_size = 4
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -30,20 +30,19 @@ val_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val/scene_1.
 test_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_test/scene_{2..6}.tar"
 models_root = None
 
-coco_json_path = "/ssd3/datasets_bop/camera_real275_datasets/real275_test_coco_1/coco_annotations.json"
-test_images_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_test_coco_1"
+coco_json_path = "/ssd3/real_camera_dataset/real275_test.json"
+test_images_root = "/ssd3/real_camera_dataset/real_test"
 
 class_name = None
 num_categories = 6
 num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_real275_diffusion_dino_bart"
-val_img_dir = "./val_img_real275_diffusion_dino_bart"
-test_img_dir = "./test_img_real275_diffusion_dino_bart"
+weight_dir = "./weights_real275_diffusion_dino_bart_256pix"
+val_img_dir = "./val_img_real275_diffusion_dino_bart_256pix"
+test_img_dir = "./test_img_real275_diffusion_dino_bart_256pix"
 
-with_transformer_loss = True
-symmetry_type = 'instance_symmetries' # or 'category_symmetries'
+with_transformer_loss = False
 
 noise_bound = 0.01
 
@@ -55,8 +54,10 @@ w_Rot = 0.0
 w_bg = 0.0
 
 # Input Data Settings
-size = 128
-num_bins = 50
+image_size = 256
+
+num_training_steps = 1000
+num_inference_steps = 100
 
 # Optimizer Settings
 lr = 1e-4
@@ -74,7 +75,7 @@ augmentation = False
 center_crop = False
 
 # Visualization Settings
-num_imgs_log = 8
+num_imgs_log = 4
 arrow_length = 0.3
 arrow_width = 0.03
 arrow_colors = {
