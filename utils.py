@@ -80,11 +80,13 @@ class CustomDataset(Dataset):
         category_names = []
         category_ids = []
         masks = []
+        scores = []
 
         for prediction in predictions:
             # ab hier dann loopy loopes
             category_names.append(self.categories[prediction['category_id']])
             category_ids.append(prediction['category_id'])
+            scores.append(prediction['score'])
 
             bbox = np.array(prediction['bbox'], dtype=int)
 
@@ -115,7 +117,7 @@ class CustomDataset(Dataset):
             "metadatas": metadatas,
             "category_names": category_names,
             "category_ids": category_ids,
-
+            "scores": scores,
             "gts": gts,
         }
 
@@ -342,6 +344,7 @@ def collate_fn_val(batch):
     metadatas = [(item['metadatas']) for item in batch]
     category_names = [(item['category_names']) for item in batch]
     category_ids = [(item['category_ids']) for item in batch]
+    scores = [(item['scores']) for item in batch]    
     gts = [(item['gts']) for item in batch]
 
     return {
@@ -356,6 +359,7 @@ def collate_fn_val(batch):
         "metadatas": metadatas,
         "category_names": category_names,
         "category_ids": category_ids,
+        "scores": scores,
         "gts": gts,
     }
 
@@ -786,7 +790,6 @@ def paste_mask_on_black_canvas(base_image, mask_image, bbox):
         canvas_shape = (*canvas_shape, 1)  # Add a channel dimension
     canvas = np.zeros((canvas_shape[0], canvas_shape[1],1), dtype=base_image.dtype)
 
-    print(canvas.shape)
     bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax = bbox
 
     if mask_image.ndim == 2:  # Single-channel mask
@@ -795,10 +798,8 @@ def paste_mask_on_black_canvas(base_image, mask_image, bbox):
     # Only update pixels where mask is non-zero
     canvas[bbox_ymin:bbox_ymax, bbox_xmin:bbox_xmax] = mask_image
 
-
     if base_image.ndim == 2:
         canvas = np.squeeze(canvas, axis=-1)
-
 
     return canvas
 
@@ -887,8 +888,8 @@ def backproject(depth, intrinsics, instance_mask=None):
 
     z = depth[idxs[0], idxs[1]]
     pts = xyz * z[:, np.newaxis]/xyz[:, -1:]
-    pts[:, 0] = -pts[:, 0]
-    pts[:, 1] = -pts[:, 1]
+    # pts[:, 0] = -pts[:, 0]
+    # pts[:, 1] = -pts[:, 1]
 
     return pts, idxs
 
@@ -949,24 +950,30 @@ def filter_points(src, dst, filter_value=0, tolerance=1/255):
     return src_filtered, dst_filtered, indices_removed
 
 def rotate_transform_matrix_180_z(transform_matrix):
-    rotation_matrix_180_z = np.array([
-        [-1, 0, 0],
-        [0, -1, 0],
-        [0, 0, 1]
-    ])
+    # rotation_matrix_180_z = np.array([
+    #     [-1, 0, 0],
+    #     [0, -1, 0],
+    #     [0, 0, 1]
+    # ])
 
-    rotation_part = transform_matrix[:3, :3]
-    translation_part = transform_matrix[:3, 3]
+    # rotation_part = transform_matrix[:3, :3]
+    # translation_part = transform_matrix[:3, 3]
 
-    new_rotation = np.dot(rotation_matrix_180_z, rotation_part)
+    # new_rotation = np.dot(rotation_matrix_180_z, rotation_part)
 
-    new_translation = np.dot(rotation_matrix_180_z, translation_part)
+    # new_translation = np.dot(rotation_matrix_180_z, translation_part)
 
-    transformed_matrix = np.eye(4)
-    transformed_matrix[:3, :3] = new_rotation
-    transformed_matrix[:3, 3] = new_translation
+    # transformed_matrix = np.eye(4)
+    # transformed_matrix[:3, :3] = new_rotation
+    # transformed_matrix[:3, 3] = new_translation
     
-    return transformed_matrix
+    z_180_RT = np.zeros((4, 4), dtype=np.float32)
+    z_180_RT[:3, :3] = np.diag([-1, -1, 1])
+    z_180_RT[3, 3] = 1
+
+    RT = np.matmul(z_180_RT,transform_matrix)
+    
+    return RT
 
 def remove_duplicate_pixels(img_array):
     processed_array = np.zeros_like(img_array)

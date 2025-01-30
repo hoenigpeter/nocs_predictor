@@ -1,6 +1,6 @@
 # General Training Settings
 max_epochs = 100
-batch_size = 4
+batch_size = 16
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -22,8 +22,6 @@ cy = 244.11084
 width = 640
 height = 480
 
-freeze_backbone = True
-
 # Data Paths
 train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_train/scene_{1..7}.tar"
 val_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val/scene_1.tar"
@@ -38,13 +36,20 @@ num_categories = 6
 num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-weight_dir = "./weights_real275_diffusion_dino_bart_256pix"
-val_img_dir = "./val_img_real275_diffusion_dino_bart_256pix"
-test_img_dir = "./test_img_real275_diffusion_dino_bart_256pix"
+experiment_name = "real275_diffusion_dino_bart"
+weight_dir = "./weights_" + experiment_name
+val_img_dir = "./val_img_" + experiment_name
+test_img_dir = "./test_img_" + experiment_name
+
+ply_output_dir = "./plys_" + experiment_name + "_50_steps"
+pkl_output_dir = "./pkls_" + experiment_name + "_50_steps"
+bboxes_output_dir = "./bboxes_" + experiment_name + "_50_steps"
 
 with_transformer_loss = False
 
-noise_bound = 0.01
+noise_bound = 0.02  # 0.01
+rotation_max_iterations = 2000 # 1000
+rotation_cost_threshold = 1e-12  # 1e-12
 
 w_NOCS_bins = 0.0
 w_NOCS_cont = 1.0
@@ -54,10 +59,12 @@ w_Rot = 0.0
 w_bg = 0.0
 
 # Input Data Settings
-image_size = 256
+image_size = 128
 
 num_training_steps = 1000
-num_inference_steps = 100
+num_inference_steps = 50
+
+weight_file = 'generator_epoch_95.pth'
 
 # Optimizer Settings
 lr = 1e-4
@@ -75,7 +82,7 @@ augmentation = False
 center_crop = False
 
 # Visualization Settings
-num_imgs_log = 4
+num_imgs_log = 8
 arrow_length = 0.3
 arrow_width = 0.03
 arrow_colors = {

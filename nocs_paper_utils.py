@@ -1667,7 +1667,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
     """
     
     num_classes = len(synset_names)
-    
     degree_thres_list = list(degree_thresholds) + [360]
     num_degree_thres = len(degree_thres_list)
 
@@ -1697,46 +1696,28 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
         gt_class_ids = result['gt_class_ids'].astype(np.int32)
         gt_RTs = np.array(result['gt_RTs'])
         gt_scales = np.array(result['gt_scales'])
-        gt_handle_visibility = np.array(result['gt_handle_visibility'])
+        gt_handle_visibility = result['gt_handle_visibility']
     
         pred_bboxes = np.array(result['pred_bboxes'])
-        pred_class_ids = np.array(result['pred_class_ids'])
-        pred_scales = np.array(result['pred_scales'])
-        pred_scores = np.array(result['pred_scores'])
+        pred_class_ids = result['pred_class_ids']
+        pred_scales = result['pred_scales']
+        pred_scores = result['pred_scores']
         pred_RTs = np.array(result['pred_RTs'])
 
         if len(gt_class_ids) == 0 and len(pred_class_ids) == 0:
             continue
 
-        print(num_classes)
         for cls_id in range(1, num_classes):
-
             # get gt and predictions in this class
             cls_gt_class_ids = gt_class_ids[gt_class_ids==cls_id] if len(gt_class_ids) else np.zeros(0)
             cls_gt_scales = gt_scales[gt_class_ids==cls_id] if len(gt_class_ids) else np.zeros((0, 3))
             cls_gt_RTs = gt_RTs[gt_class_ids==cls_id] if len(gt_class_ids) else np.zeros((0, 4, 4))
+
             cls_pred_class_ids = pred_class_ids[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros(0)
             cls_pred_bboxes =  pred_bboxes[pred_class_ids==cls_id, :] if len(pred_class_ids) else np.zeros((0, 4))
             cls_pred_scores = pred_scores[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros(0)
             cls_pred_RTs = pred_RTs[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros((0, 4, 4))
             cls_pred_scales = pred_scales[pred_class_ids==cls_id] if len(pred_class_ids) else np.zeros((0, 3))
-
-            # print("gt_RTs: ", gt_RTs.shape)
-            # print("pred_RTs: ", pred_RTs.shape)
-            # print("gt_class_ids: ", gt_class_ids.shape)
-            # print("pred_class_ids: ", pred_class_ids.shape)
-            # print("gt_class_ids: ", gt_class_ids)
-            # print("pred_class_ids: ", pred_class_ids)
-
-            # print("cls_gt_class_ids: ", cls_gt_class_ids)
-            # print("cls_gt_scales: ", cls_gt_scales)
-            # print("cls_gt_RTs: ", cls_gt_RTs)
-            # print("cls_pred_class_ids: ", cls_pred_class_ids)
-            # print("cls_pred_bboxes: ", cls_pred_bboxes)
-            # print("cls_pred_scores: ", cls_pred_scores)
-            # print("cls_pred_RTs: ", cls_pred_RTs)
-            # print("cls_pred_scales: ", cls_pred_scales)
-            # print()
 
             # if len(cls_gt_class_ids) == 0 and len(cls_pred_class_ids) == 0:
             #     continue
@@ -1762,12 +1743,25 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
             #         pose_pred_scores_all[cls_id] = np.concatenate((pose_pred_scores_all[cls_id], cls_pred_scores_tile), axis=-1)
             #     continue
 
-            # calculate the overlap between each gt instance and pred instance
 
+
+            # calculate the overlap between each gt instance and pred instance
             if synset_names[cls_id] != 'mug':
                 cls_gt_handle_visibility = np.ones_like(cls_gt_class_ids)
             else:
                 cls_gt_handle_visibility = gt_handle_visibility[gt_class_ids==cls_id] if len(gt_class_ids) else np.ones(0)
+
+            # print("cls_pred_scales: ", cls_pred_scales)
+            # print("cls_gt_scales: ", cls_gt_scales)
+            # print("cls_gt_class_ids: ", cls_gt_class_ids)
+            # print("cls_pred_class_ids: ", cls_pred_class_ids)
+            # print("cls_gt_RTs: ", cls_gt_RTs)
+            # print("cls_pred_RTs: ", cls_pred_RTs)
+            # print("cls_gt_handle_visibility: ", cls_gt_handle_visibility)
+            # print("cls_pred_bboxes: ", cls_pred_bboxes)
+            # print("cls_pred_scores: ", cls_pred_scores)
+            # print("iou_thres_list: ", iou_thres_list)
+            # print()
 
             iou_cls_gt_match, iou_cls_pred_match, _, iou_pred_indices = compute_3d_matches(cls_gt_class_ids, cls_gt_RTs, cls_gt_scales, cls_gt_handle_visibility, synset_names,
                                                                                            cls_pred_bboxes, cls_pred_class_ids, cls_pred_scores, cls_pred_RTs, cls_pred_scales,
@@ -1778,6 +1772,7 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
                 cls_pred_RTs = cls_pred_RTs[iou_pred_indices]
                 cls_pred_scores = cls_pred_scores[iou_pred_indices]
                 cls_pred_bboxes = cls_pred_bboxes[iou_pred_indices]
+
 
             iou_pred_matches_all[cls_id] = np.concatenate((iou_pred_matches_all[cls_id], iou_cls_pred_match), axis=-1)
             cls_pred_scores_tile = np.tile(cls_pred_scores, (num_iou_thres, 1))
@@ -1795,18 +1790,14 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
                 cls_pred_scores = cls_pred_scores[iou_thres_pred_match > -1] if len(iou_thres_pred_match) > 0 else np.zeros(0)
                 cls_pred_bboxes = cls_pred_bboxes[iou_thres_pred_match > -1] if len(iou_thres_pred_match) > 0 else np.zeros((0, 4))
 
-
                 iou_thres_gt_match = iou_cls_gt_match[thres_ind, :]
                 cls_gt_class_ids = cls_gt_class_ids[iou_thres_gt_match > -1] if len(iou_thres_gt_match) > 0 else np.zeros(0)
                 cls_gt_RTs = cls_gt_RTs[iou_thres_gt_match > -1] if len(iou_thres_gt_match) > 0 else np.zeros((0, 4, 4))
                 cls_gt_handle_visibility = cls_gt_handle_visibility[iou_thres_gt_match > -1] if len(iou_thres_gt_match) > 0 else np.zeros(0)
 
-
-
             RT_overlaps = compute_RT_overlaps(cls_gt_class_ids, cls_gt_RTs, cls_gt_handle_visibility, 
                                               cls_pred_class_ids, cls_pred_RTs,
                                               synset_names)
-
 
             pose_cls_gt_match, pose_cls_pred_match = compute_match_from_degree_cm(RT_overlaps, 
                                                                                   cls_pred_class_ids, 
@@ -1814,7 +1805,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
                                                                                   degree_thres_list, 
                                                                                   shift_thres_list)
             
-
             pose_pred_matches_all[cls_id] = np.concatenate((pose_pred_matches_all[cls_id], pose_cls_pred_match), axis=-1)
             
             cls_pred_scores_tile = np.tile(cls_pred_scores, (num_degree_thres, num_shift_thres, 1))
@@ -1882,7 +1872,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
     with open(pose_dict_pkl_path, 'wb') as f:
         cPickle.dump(pose_dict, f)
 
-
     for cls_id in range(1, num_classes):
         class_name = synset_names[cls_id]
         # print(np.amin(aps[i, :, :]), np.amax(aps[i, :, :]))
@@ -1918,7 +1907,6 @@ def compute_degree_cm_mAP(final_results, synset_names, log_dir, degree_threshold
     plt.savefig(output_path)
     plt.close(fig_pose)
 
-    
     fig_rot = plt.figure()
     ax_rot = plt.subplot(111)
     plt.ylabel('AP')
@@ -2861,7 +2849,39 @@ def draw_detections(image, save_dir, data_name, image_id, intrinsics, synset_nam
 
         cv2.imwrite(output_path, draw_image_bbox[:, :, ::-1])
 
+def draw_3d_bbox(image, save_dir, data_name, image_id, intrinsics, gt_RTs, gt_scales, pred_RTs, pred_scales):
 
+    output_path = os.path.join(save_dir, 'bboxes_{}_{:04d}_gt.png'.format(data_name, image_id))
+    draw_image_bbox = (image.copy() * 255).astype(np.uint8)
+
+    intrinsics = np.array([[591.0125, 0, 322.525], [0, 590.16775, 244.11084], [0, 0, 1]])
+
+    for ind, RT in enumerate(gt_RTs):
+        xyz_axis = 0.3*np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0]]).transpose()
+        transformed_axes = transform_coordinates_3d(xyz_axis, RT)
+        projected_axes = calculate_2d_projections(transformed_axes, intrinsics)
+
+        bbox_3d = get_3d_bbox(gt_scales[ind], 0)
+        transformed_bbox_3d = transform_coordinates_3d(bbox_3d, RT)
+        projected_bbox = calculate_2d_projections(transformed_bbox_3d, intrinsics)
+        draw_image_bbox = draw(draw_image_bbox, projected_bbox, projected_axes, (255, 0, 0))
+
+    cv2.imwrite(output_path, draw_image_bbox[:, :, ::-1]) 
+
+    output_path = os.path.join(save_dir, 'bboxes_{}_{:04d}_pred.png'.format(data_name, image_id))
+    draw_image_bbox = (image.copy() * 255).astype(np.uint8)
+
+    for ind, RT in enumerate(pred_RTs):
+        xyz_axis = 0.3*np.array([[0, 0, 0], [0, 0, 1], [0, 1, 0], [1, 0, 0]]).transpose()
+        transformed_axes = transform_coordinates_3d(xyz_axis, RT)
+        projected_axes = calculate_2d_projections(transformed_axes, intrinsics)
+
+        bbox_3d = get_3d_bbox(pred_scales[ind], 0)
+        transformed_bbox_3d = transform_coordinates_3d(bbox_3d, RT)
+        projected_bbox = calculate_2d_projections(transformed_bbox_3d, intrinsics)
+        draw_image_bbox = draw(draw_image_bbox, projected_bbox, projected_axes, (255, 0, 0))
+
+    cv2.imwrite(output_path, draw_image_bbox[:, :, ::-1])
 
 def draw_coco_detections(image, save_dir, data_name, image_id, synset_names, draw_rgb_coord,
                         gt_bbox, gt_class_ids, gt_mask, 

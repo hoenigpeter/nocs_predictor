@@ -37,7 +37,7 @@ num_categories = 6
 num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_diffusion_dino_bart_full_nocs_scale"
+experiment_name = "camera_diffusion_dino_bart_normals"
 weight_dir = "./weights_" + experiment_name
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
@@ -52,12 +52,7 @@ noise_bound = 0.02  # 0.01
 rotation_max_iterations = 1000 # 1000
 rotation_cost_threshold = 1e-12  # 1e-12
 
-w_NOCS_bins = 0.0
 w_NOCS_cont = 1.0
-w_NOCS_ss = 0.0
-w_seg = 0.0
-w_Rot = 0.0
-w_bg = 0.0
 
 # Input Data Settings
 image_size = 128
