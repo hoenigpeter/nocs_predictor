@@ -25,8 +25,6 @@ import imageio
 
 from skimage.transform import SimilarityTransform
 
-import teaserpp_python
-
 class CustomDataset(Dataset):
     def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
 
@@ -837,6 +835,8 @@ def combine_images_overlapping(images):
     return combined_image
 
 def teaserpp_solve(src, dst, config):
+    import teaserpp_python
+
     # Populate the parameters
     solver_params = teaserpp_python.RobustRegistrationSolver.Params()
     solver_params.cbar2 = 1
