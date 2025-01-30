@@ -323,7 +323,7 @@ def custom_collate_fn(batch):
     normals_batch = torch.stack([torch.tensor(item[1]) for item in batch])
     mask_batch = torch.stack([torch.tensor(item[2]) for item in batch])
     nocs_batch = torch.stack([torch.tensor(item[3]) for item in batch])
-    info_batch = [item[3] for item in batch]
+    info_batch = [item[4] for item in batch]
 
     return {
         'rgb': rgb_batch,
@@ -553,7 +553,7 @@ def setup_environment(gpu_id):
         gpu_id = ''
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
-def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, mask_images_binary, mask_images_gt, rot_estimated_R, config):
+def plot_progress_imgs(imgfn, rgb_images, normal_images, nocs_images_normalized_gt, nocs_estimated, mask_images, config):
     # Print value ranges for each input
     # print(f"RGB Images - Min: {torch.min(rgb_images):.4f}, Max: {torch.max(rgb_images):.4f}")
     # print(f"NOCS GT - Min: {torch.min(nocs_images_normalized_gt):.4f}, Max: {torch.max(nocs_images_normalized_gt):.4f}")
@@ -566,7 +566,7 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
     _,ax = plt.subplots(config.num_imgs_log,6,figsize=(10,20))
     # rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks
     # Define column titles
-    col_titles = ['RGB Image', 'NOCS GT', 'NOCS Estimated', 'Mask GT', 'Mask Estimated', 'Mask Binary Estimated']
+    col_titles = ['RGB Image', 'Normals GT', 'NOCS GT', 'NOCS Estimated', 'Mask GT']
     
     # Add column titles
     for i, title in enumerate(col_titles):
@@ -574,40 +574,39 @@ def plot_progress_imgs(imgfn, rgb_images, nocs_images_normalized_gt, nocs_estima
 
     for i in range(config.num_imgs_log):
         ax[i, 0].imshow(((rgb_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 1].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 2].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 3].imshow(((mask_images[i])).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 4].imshow(((mask_images_binary[i])).detach().cpu().numpy().transpose(1, 2, 0))
-        ax[i, 5].imshow(((mask_images_gt[i])).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 1].imshow(((normal_images[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 2].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 3].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
+        ax[i, 4].imshow(((mask_images[i])).detach().cpu().numpy().transpose(1, 2, 0))
 
-        # Plot rotation arrows
-        rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
+        # # Plot rotation arrows
+        # rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
 
-        # Define arrow directions for x, y, z axes
-        arrow_directions = {
-            'x': np.array([1, 0, 0]),  # X-axis direction
-            'y': np.array([0, 1, 0]),  # Y-axis direction
-            'z': np.array([0, 0, 1])   # Z-axis direction
-        }
+        # # Define arrow directions for x, y, z axes
+        # arrow_directions = {
+        #     'x': np.array([1, 0, 0]),  # X-axis direction
+        #     'y': np.array([0, 1, 0]),  # Y-axis direction
+        #     'z': np.array([0, 0, 1])   # Z-axis direction
+        # }
 
-        # Get the start point (e.g., center of the image in normalized coordinates)
-        start_point = np.array([0.5, 0.5])  # Center of the image
+        # # Get the start point (e.g., center of the image in normalized coordinates)
+        # start_point = np.array([0.5, 0.5])  # Center of the image
 
-        # Iterate over each arrow direction and plot
-        for key, direction in arrow_directions.items():
-            # Transform the arrow direction using the rotation matrix
-            transformed_arrow = rotation_matrix @ direction
+        # # Iterate over each arrow direction and plot
+        # for key, direction in arrow_directions.items():
+        #     # Transform the arrow direction using the rotation matrix
+        #     transformed_arrow = rotation_matrix @ direction
             
-            # Calculate end point based on the transformed arrow
-            end_point = start_point + (transformed_arrow[:2] * config.arrow_length)  # Only use x and y for 2D
+        #     # Calculate end point based on the transformed arrow
+        #     end_point = start_point + (transformed_arrow[:2] * config.arrow_length)  # Only use x and y for 2D
             
-            # Plot the arrow
-            ax[i, 0].quiver(
-                start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
-                (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
-                (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
-                angles='xy', scale_units='xy', scale=1, color=config.arrow_colors[key], width=config.arrow_width
-            )
+        #     # Plot the arrow
+        #     ax[i, 0].quiver(
+        #         start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
+        #         (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
+        #         (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
+        #         angles='xy', scale_units='xy', scale=1, color=config.arrow_colors[key], width=config.arrow_width
+        #     )
 
     plt.tight_layout()
     plt.savefig(imgfn, dpi=300)
