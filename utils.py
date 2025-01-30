@@ -320,12 +320,14 @@ def make_log_dirs(dir_list):
 
 def custom_collate_fn(batch):
     rgb_batch = torch.stack([torch.tensor(item[0]) for item in batch])
-    mask_batch = torch.stack([torch.tensor(item[1]) for item in batch])
-    nocs_batch = torch.stack([torch.tensor(item[2]) for item in batch])
+    normals_batch = torch.stack([torch.tensor(item[1]) for item in batch])
+    mask_batch = torch.stack([torch.tensor(item[2]) for item in batch])
+    nocs_batch = torch.stack([torch.tensor(item[3]) for item in batch])
     info_batch = [item[3] for item in batch]
 
     return {
         'rgb': rgb_batch,
+        'normals': normals_batch,
         'mask': mask_batch,
         'nocs': nocs_batch,
         'info': info_batch,
@@ -453,9 +455,10 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
     dataset = wds.WebDataset(dataset_paths, shardshuffle=True) \
         .decode() \
         .shuffle(shuffle_buffer, initial=size) \
-        .to_tuple("rgb.png", "mask_visib.png", "nocs.png", "info.json") \
+        .to_tuple("rgb.png", "normals.png", "mask_visib.png", "nocs.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
+            lambda normals: preprocess(load_image(normals), size, Image.NEAREST, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
             lambda nocs: preprocess(load_image(nocs), size, Image.NEAREST, center_crop=center_crop), 
             lambda info: info) \
