@@ -187,7 +187,7 @@ def main(config):
                 nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, obj_names)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
-                plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, config)
+                plot_progress_imgs(imgfn, rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, config)
         
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
@@ -283,7 +283,7 @@ def main(config):
         nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, obj_names)
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
-        plot_progress_imgs(imgfn, rgb_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, config)
+        plot_progress_imgs(imgfn, rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, config)
         
         if epoch % config.save_epoch_interval == 0:
             # Save the entire model
