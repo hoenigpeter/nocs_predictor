@@ -338,7 +338,6 @@ def collate_fn_val(batch):
     depth_images = torch.stack([torch.tensor(item['depth']) for item in batch])
     mask_images = [(item['masks']) for item in batch]
     rgb_crops = [(item['rgb_crops']) for item in batch]
-    #mask_crops = [(item['mask_crops']) for item in batch]
     mask_crops = [(item['mask_crops']) for item in batch]
     bboxes = [(item['bboxes']) for item in batch]
     metadatas = [(item['metadatas']) for item in batch]
