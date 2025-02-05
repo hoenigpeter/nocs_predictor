@@ -109,7 +109,7 @@ def main(config):
             obj_names = []
 
             for entry in infos:
-                obj_name = entry["obj_name"]
+                #obj_name = entry["obj_name"]
                 obj_cat = entry["category_id"]
                 obj_names.append(obj_name.split('-', 1)[0])
 

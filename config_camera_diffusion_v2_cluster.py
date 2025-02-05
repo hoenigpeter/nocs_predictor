@@ -24,20 +24,20 @@ width = 640
 height = 480
 
 # Data Paths
-train_data_root = "/media/ssd2/peter/datasets/real_camera_dataset/camera_train_full_normals/shard-{000000..000051}.tar"    # is different!
-val_data_root = "/media/ssd2/peter/datasets/real_camera_dataset/real275_val_normals/scene_1.tar"
+train_data_root = "/home/peter.hoenig/datasets/camera_train_full_normals/shard-{000000..000051}.tar"    # is different!
+val_data_root = "/home/peter.hoenig/datasets/real275_val_normals/scene_1.tar"
 test_data_root = val_data_root
 models_root = None
 
-coco_json_path = "/media/ssd2/peter/datasets/real_camera_dataset/real275_test_3d_bbox.json"
-test_images_root = "/media/ssd2/peter/datasets/real_camera_dataset/real_test"
+coco_json_path = "/home/peter.hoenig/datasets/real275_test_3d_bbox.json"
+test_images_root = "/home/peter.hoenig/datasets/real_test"
 
 class_name = None
 num_categories = 6
 num_points_to_sample = 2000
 
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_diffusion_dino_bart_normals"
+experiment_name = "camera_diffusion_dino_bart_normals_dropout"
 weight_dir = "./weights_" + experiment_name
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
@@ -61,7 +61,7 @@ image_size = 128
 num_training_steps = 1000
 num_inference_steps = 50
 
-weight_file = 'generator_epoch_15.pth'
+weight_file = 'generator_epoch_20.pth'
 
 # Optimizer Settings
 lr = 1e-4

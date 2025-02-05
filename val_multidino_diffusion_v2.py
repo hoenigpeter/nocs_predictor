@@ -68,7 +68,7 @@ def project_pointcloud_to_image(pointcloud, pointnormals, fx, fy, cx, cy, image_
 
 def main(config):
     setup_environment(str(config.gpu_id))
-    make_log_dirs([config.weight_dir, config.val_img_dir, config.ply_output_dir, config.pkl_output_dir, config.bboxes_output_dir])
+    make_log_dirs([config.weight_dir, config.val_img_dir, config.ply_output_dir, config.pkl_output_dir, config.bboxes_output_dir, config.png_output.dir])
 
     camera_intrinsics = {
         'fx': config.fx,
@@ -164,9 +164,6 @@ def main(config):
                 binary_mask_full_images = (binary_mask_full_images.squeeze(0).squeeze(0).cpu().numpy() > 0).astype(np.uint8)
 
                 mask_full_np = paste_mask_on_black_canvas((rgb_np * 255).astype(np.uint8), (mask_resized).astype(np.uint8), bboxes[idx])
-                nocs_full_np = paste_nocs_on_black_canvas((rgb_np * 255).astype(np.uint8), (nocs_estimated_resized_masked).astype(np.uint8), bboxes[idx])
-
-                coords.append(nocs_full_np)
 
                 dst, idxs = backproject(depth_images, camera_intrinsics, mask_full_np)
                 dst = dst.T
@@ -206,6 +203,9 @@ def main(config):
                 nocs_estimated_resized_masked = nocs_estimated_resized_holes.copy()
                 nocs_estimated_resized_masked[binary_mask == 0] = 0
                 nocs_estimated_resized_masked = nocs_estimated_resized_masked.astype(np.float32) / 255
+                nocs_full_np = paste_nocs_on_black_canvas((rgb_np * 255).astype(np.uint8), (nocs_estimated_resized_masked).astype(np.uint8), bboxes[idx])
+
+                coords.append(nocs_full_np)
 
                 nocs_full_np = (nocs_full_np.astype(float) / 127.5) - 1
                 src = nocs_full_np[idxs[0], idxs[1], :].T
