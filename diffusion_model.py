@@ -975,6 +975,12 @@ class DiffusionNOCS(nn.Module):
 
         self.num_training_steps = num_training_steps
         self.num_inference_steps = num_inference_steps
+        
+        self.norm = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self._transform = transforms.Compose([
+            T.Resize((224, 224)),
+            self.norm,
+        ])
 
     def forward(self, rgb_image, normals_image, nocs_gt, obj_names):
         noise = torch.randn(nocs_gt.shape, dtype=nocs_gt.dtype, device=nocs_gt.device)
