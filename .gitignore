@@ -164,6 +164,20 @@ cython_debug/
 /pkls_*
 /plys_*
 
+dinov2-small/
+pca6.pkl
+pca6.pkl.1
+pngs_camera_diffusion_dino_bart_normals_dropout/
+pngs_camera_pbr_128px_fixed_names/
+pngs_camera_pbr_160px_fixed_names/
+pngs_camera_pbr_20_obj_160px_oriented_normals/
+pngs_camera_pbr_20_obj_160px_oriented_normals2/
+pngs_camera_pbr_20_obj_160px_oriented_normals_rgb_only/
+pngs_camera_pbr_20_obj_160px_oriented_normals_rgb_only_2/
+pngs_camera_pbr_all_obj_160px_oriented_normals/
+pngs_camera_pbr_all_obj_160px_oriented_normals2/
+pngs_camera_pbr_all_obj_160px_oriented_normals_rgb_only_2/
+
 
 
 /val_img*

@@ -90,7 +90,7 @@ def main(config):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    generator = DiffusionNOCSDinoBARTNormals(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    generator = DiffusionNOCSDinoBART(input_nc = 6, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     
     model_path = os.path.join(config.weight_dir, config.weight_file)
     state_dict = torch.load(model_path, map_location=device)
@@ -214,7 +214,7 @@ def main(config):
                 for ref_step in range(config.num_refinement_steps):
                     print("Refinement step: ", ref_step)
 
-                    nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, combined_embeddings)
+                    nocs_estimated = generator.inference(rgb_images_gt, combined_embeddings)
 
                     nocs_estimated_np = (nocs_estimated).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
                     nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadatas[idx], interpolation=Image.NEAREST)

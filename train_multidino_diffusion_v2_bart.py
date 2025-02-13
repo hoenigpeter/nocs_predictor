@@ -20,8 +20,7 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
                     preload_pointclouds, plot_single_image, apply_rotation, parse_args, load_config, \
                     add_loss
 
-from networks import UnetGeneratorMultiHead
-from diffusion_model import DiffusionNOCS, DiffusionNOCSDino, DiffusionNOCSDinoBARTNormals
+from diffusion_model import DiffusionNOCSBARTPCA
 
 # Create a lookup function
 def lookup(category_id, objects):
@@ -45,7 +44,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCSDinoBARTNormals(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    generator = DiffusionNOCSBARTPCA(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     generator.to(device)
     print(generator)
 
@@ -63,25 +62,6 @@ def main(config):
     val_dataloader = wds.WebLoader(
             val_dataset, batch_size=config.batch_size, shuffle=False, num_workers=config.val_num_workers, drop_last=True, collate_fn=custom_collate_fn,
     )
-
-    # train_dataloader = DataLoader(
-    #     train_dataset, 
-    #     batch_size=config.batch_size, 
-    #     shuffle=True,  # Shuffle should typically be True for training
-    #     num_workers=config.train_num_workers, 
-    #     drop_last=True, 
-    #     collate_fn=custom_collate_fn
-    # )
-
-    # # Validation DataLoader
-    # val_dataloader = DataLoader(
-    #     val_dataset, 
-    #     batch_size=config.batch_size, 
-    #     shuffle=True,  # Shuffle should be False for validation
-    #     num_workers=config.val_num_workers, 
-    #     drop_last=True, 
-    #     collate_fn=custom_collate_fn
-    # )
 
     # Training Loop
     epoch = 0
@@ -120,16 +100,12 @@ def main(config):
             nocs_images = batch['nocs']
             infos = batch['info']
 
-            pcs = []
             obj_names = []
 
             for entry in infos:
-                #obj_name = entry["obj_name"]
                 obj_cat = entry["category_id"]
                 obj_name = lookup(obj_cat, objects)
                 obj_names.append(obj_name)
-
-                #obj_names.append(obj_name.split('-', 1)[0])
 
             # Normalize mask to be binary (0 or 1)
             binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
@@ -139,7 +115,7 @@ def main(config):
             rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
             rgb_images = rgb_images.permute(0, 3, 1, 2)
             rgb_images = rgb_images.to(device)
-            rgb_images = rgb_images * binary_mask
+            #rgb_images = rgb_images * binary_mask
             rgb_images_gt = (rgb_images.float() / 127.5) - 1
 
             # Normals processing
@@ -161,13 +137,8 @@ def main(config):
             nocs_images_normalized_gt = nocs_images_normalized.to(device)
 
             # forward pass through generator
-            #x_logits, y_logits, z_logits, nocs_estimated, masks_estimated, rotation_est = generator(rgb_images_gt)
-            regression_nocs_loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
-
-            # LOSSES Summation
-            loss = 0
-            loss += config.w_NOCS_cont * regression_nocs_loss
-            
+            loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, binary_mask, obj_names)
+           
             # Loss backpropagation
             optimizer_generator.zero_grad()
             loss.backward()
@@ -176,19 +147,16 @@ def main(config):
             optimizer_generator.step()
             elapsed_time_iteration = time.time() - start_time_iteration
 
-            running_regression_nocs_loss += regression_nocs_loss.item()
-
             running_loss += loss.item()
             iteration += 1
 
             if (step + 1) % config.iter_cnt == 0:
                 avg_loss = running_loss / config.iter_cnt
-                avg_running_regression_nocs_loss = running_regression_nocs_loss / config.iter_cnt
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, Reg NOCS Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
-                    epoch, step, avg_loss, avg_running_regression_nocs_loss, lr_current, elapsed_time_iteration))
+                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
+                    epoch, step, avg_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
@@ -200,19 +168,17 @@ def main(config):
                 })
 
                 running_loss = 0
-                running_regression_nocs_loss = 0
 
                 nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, obj_names)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
                 plot_progress_imgs(imgfn, rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, config)
-        
+
         elapsed_time_epoch = time.time() - start_time_epoch
         print("Time for the whole epoch: {:.4f} seconds".format(elapsed_time_epoch))
 
         generator.eval()
         running_loss = 0.0
-        running_regression_nocs_loss = 0
 
         val_iter = 0
         start_time_epoch = time.time()
@@ -264,21 +230,11 @@ def main(config):
                 nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
                 nocs_images_normalized_gt = nocs_images_normalized.to(device)
 
-                # ROTATION processing
-                rotations = [torch.tensor(entry["rotation"], dtype=torch.float32) for entry in infos]
-                rotation_gt = torch.stack(rotations).to(device)
-
                 # forward pass through generator
-                regression_nocs_loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
+                loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, binary_mask, obj_names)
                 
                 # LOSSES Summation
-                loss = 0
-                loss += config.w_NOCS_cont * regression_nocs_loss
-
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
-
-                running_regression_nocs_loss += regression_nocs_loss.item()
-
                 running_loss += loss.item()
 
                 val_iter+=1
