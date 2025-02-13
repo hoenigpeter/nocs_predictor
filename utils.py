@@ -455,7 +455,7 @@ def create_webdataset(dataset_paths, size=128, shuffle_buffer=1000, augment=Fals
         .to_tuple("rgb.png", "normals.png", "mask_visib.png", "nocs.png", "info.json") \
         .map_tuple( 
             lambda rgb: preprocess(load_image(rgb), size, Image.BICUBIC, augment=augment, center_crop=center_crop), 
-            lambda normals: preprocess(load_image(normals), size, Image.NEAREST, center_crop=center_crop), 
+            lambda normals: preprocess(load_image(normals), size, Image.NEAREST, augment=True, center_crop=center_crop), 
             lambda mask: preprocess(load_image(mask), size, Image.NEAREST, center_crop=center_crop), 
             lambda nocs: preprocess(load_image(nocs), size, Image.NEAREST, center_crop=center_crop), 
             lambda info: info) \
@@ -508,22 +508,29 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False, is_
 
     # Augmentation logic (only for non-depth images)
     if augment and not is_depth:
-        prob = 0.8
+        prob = 1.0
+        # seq_syn = iaa.Sequential([
+        #                             iaa.Sometimes(0.3 * prob, iaa.CoarseDropout(p=0.2, size_percent=0.05)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
+        #                             iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
+        #                             iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
+        #                             iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
+        #                             iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
+        #                             ], random_order=True)
+
         seq_syn = iaa.Sequential([
-                                    iaa.Sometimes(0.3 * prob, iaa.CoarseDropout(p=0.2, size_percent=0.05)),
-                                    iaa.Sometimes(0.5 * prob, iaa.GaussianBlur((0., 3.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceSharpness(factor=(0., 50.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceContrast(factor=(0.2, 50.))),
-                                    iaa.Sometimes(0.5 * prob, iaa.pillike.EnhanceBrightness(factor=(0.1, 6.))),
-                                    iaa.Sometimes(0.3 * prob, iaa.pillike.EnhanceColor(factor=(0., 20.))),
-                                    iaa.Sometimes(0.5 * prob, iaa.Add((-25, 25), per_channel=0.3)),
-                                    iaa.Sometimes(0.3 * prob, iaa.Invert(0.2, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4), per_channel=0.5)),
-                                    iaa.Sometimes(0.5 * prob, iaa.Multiply((0.6, 1.4))),
-                                    iaa.Sometimes(0.1 * prob, iaa.AdditiveGaussianNoise(scale=10, per_channel=True)),
-                                    iaa.Sometimes(0.5 * prob, iaa.contrast.LinearContrast((0.5, 2.2), per_channel=0.3)),
-                                    iaa.Sometimes(0.5 * prob, iaa.LinearContrast((0.5, 2.2), per_channel=0.3))
-                                    ], random_order=True)
+                            #iaa.Sometimes(0.3 * prob, iaa.CoarseDropout(p=0.2, size_percent=0.05)),
+                            iaa.Sometimes(0.5 * prob, iaa.Dropout(p=(0.0, 0.1)))
+                            ], random_order=True)
+
+
         img_array = seq_syn.augment_image(img_array)
 
     image = Image.fromarray(img_array)
@@ -551,18 +558,7 @@ def setup_environment(gpu_id):
     os.environ['CUDA_VISIBLE_DEVICES'] = gpu_id
 
 def plot_progress_imgs(imgfn, rgb_images, normal_images, nocs_images_normalized_gt, nocs_estimated, mask_images, config):
-    # Print value ranges for each input
-    # print(f"RGB Images - Min: {torch.min(rgb_images):.4f}, Max: {torch.max(rgb_images):.4f}")
-    # print(f"NOCS GT - Min: {torch.min(nocs_images_normalized_gt):.4f}, Max: {torch.max(nocs_images_normalized_gt):.4f}")
-    # print(f"NOCS Estimated - Min: {torch.min(nocs_estimated):.4f}, Max: {torch.max(nocs_estimated):.4f}")
-    # print(f"Mask Images - Min: {torch.min(mask_images):.4f}, Max: {torch.max(mask_images):.4f}")
-    # print(f"Binary Mask Images - Min: {torch.min(mask_images_binary):.4f}, Max: {torch.max(mask_images_binary):.4f}")
-    # print(f"Ground Truth Mask Images - Min: {torch.min(mask_images_gt):.4f}, Max: {torch.max(mask_images_gt):.4f}")
-
-    # print()
-    _,ax = plt.subplots(config.num_imgs_log,6,figsize=(10,20))
-    # rgb_images, nocs_images_normalized_gt, nocs_estimated, mask_images, masks_estimated, binary_masks
-    # Define column titles
+    _,ax = plt.subplots(config.num_imgs_log, 6, figsize=(10,20))
     col_titles = ['RGB Image', 'Normals GT', 'NOCS GT', 'NOCS Estimated', 'Mask GT']
     
     # Add column titles
@@ -575,35 +571,6 @@ def plot_progress_imgs(imgfn, rgb_images, normal_images, nocs_images_normalized_
         ax[i, 2].imshow(((nocs_images_normalized_gt[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 3].imshow(((nocs_estimated[i] + 1) / 2).detach().cpu().numpy().transpose(1, 2, 0))
         ax[i, 4].imshow(((mask_images[i])).detach().cpu().numpy().transpose(1, 2, 0))
-
-        # # Plot rotation arrows
-        # rotation_matrix = rot_estimated_R[i].detach().cpu().numpy()  # Get the rotation matrix for the current image
-
-        # # Define arrow directions for x, y, z axes
-        # arrow_directions = {
-        #     'x': np.array([1, 0, 0]),  # X-axis direction
-        #     'y': np.array([0, 1, 0]),  # Y-axis direction
-        #     'z': np.array([0, 0, 1])   # Z-axis direction
-        # }
-
-        # # Get the start point (e.g., center of the image in normalized coordinates)
-        # start_point = np.array([0.5, 0.5])  # Center of the image
-
-        # # Iterate over each arrow direction and plot
-        # for key, direction in arrow_directions.items():
-        #     # Transform the arrow direction using the rotation matrix
-        #     transformed_arrow = rotation_matrix @ direction
-            
-        #     # Calculate end point based on the transformed arrow
-        #     end_point = start_point + (transformed_arrow[:2] * config.arrow_length)  # Only use x and y for 2D
-            
-        #     # Plot the arrow
-        #     ax[i, 0].quiver(
-        #         start_point[0] * rgb_images[i].shape[2], start_point[1] * rgb_images[i].shape[1],
-        #         (end_point[0] - start_point[0]) * rgb_images[i].shape[2], 
-        #         (end_point[1] - start_point[1]) * rgb_images[i].shape[1],
-        #         angles='xy', scale_units='xy', scale=1, color=config.arrow_colors[key], width=config.arrow_width
-        #     )
 
     plt.tight_layout()
     plt.savefig(imgfn, dpi=300)

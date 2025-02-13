@@ -21,7 +21,7 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
                     add_loss
 
 from networks import UnetGeneratorMultiHead
-from diffusion_model import DiffusionNOCS
+from diffusion_model import DiffusionNOCS, DiffusionNOCSDino, DiffusionNOCSDinoBARTNormals
 
 # Create a lookup function
 def lookup(category_id, objects):
@@ -45,7 +45,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCS(input_nc = 9, output_nc = 3, config.with_dino_feat, config.with_bart_feat, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    generator = DiffusionNOCSDino(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     generator.to(device)
     print(generator)
 
@@ -199,7 +199,7 @@ def main(config):
                 running_loss = 0
                 running_regression_nocs_loss = 0
 
-                embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
+                embeddings = generator.get_dino_embeddings(rgb_images_gt)
                 nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, embeddings)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
@@ -292,7 +292,7 @@ def main(config):
         print("Time for the validation: {:.4f} seconds".format(elapsed_time_epoch))
         print("Val Loss: {:.4f}".format(avg_loss))
 
-        embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
+        embeddings = generator.get_dino_embeddings(rgb_images_gt)
         nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, embeddings)
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)

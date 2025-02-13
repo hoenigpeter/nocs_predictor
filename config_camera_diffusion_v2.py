@@ -15,8 +15,8 @@ width = 640
 height = 480
 
 # Data Paths
-#train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/camera_pbr_20_obj_oriented_normals/shard-{000000..000509}.tar"    # is different!
-train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val_normals/scene_1.tar"
+train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/camera_pbr_all_obj_oriented_normals/shard-{000000..000509}.tar"    # is different!
+#train_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val_normals/scene_1.tar"
 val_data_root = "/ssd3/datasets_bop/camera_real275_datasets/real275_val_normals/scene_1.tar"
 test_data_root = val_data_root
 
@@ -27,8 +27,13 @@ class_name = None
 num_categories = 6
 num_points_to_sample = 1000
 
+################## EMBEDDINGS ###########################
+with_dino_feat = True
+with_bart_feat = False
+#########################################################
+
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_pbr_20_pca"
+experiment_name = "camera_pbr_all_obj_160px_oriented_normals_DINO_only"
 weight_dir = "./weights_" + experiment_name
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
