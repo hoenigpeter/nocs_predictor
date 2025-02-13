@@ -92,7 +92,6 @@ def main(config):
 
         start_time_epoch = time.time()
         running_loss = 0.0 
-        running_regression_nocs_loss = 0.0 
 
         generator.train()
 
@@ -159,11 +158,7 @@ def main(config):
             nocs_images_normalized_gt = nocs_images_normalized.to(device)
 
             # forward pass through generator
-            regression_nocs_loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
-
-            # LOSSES Summation
-            loss = 0
-            loss += config.w_NOCS_cont * regression_nocs_loss
+            loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
             
             # Loss backpropagation
             optimizer_generator.zero_grad()
@@ -173,31 +168,27 @@ def main(config):
             optimizer_generator.step()
             elapsed_time_iteration = time.time() - start_time_iteration
 
-            running_regression_nocs_loss += regression_nocs_loss.item()
-
             running_loss += loss.item()
             iteration += 1
 
             if (step + 1) % config.iter_cnt == 0:
                 avg_loss = running_loss / config.iter_cnt
-                avg_running_regression_nocs_loss = running_regression_nocs_loss / config.iter_cnt
 
                 elapsed_time_iteration = time.time() - start_time_iteration
                 lr_current = optimizer_generator.param_groups[0]['lr']
-                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, Reg NOCS Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
-                    epoch, step, avg_loss, avg_running_regression_nocs_loss, lr_current, elapsed_time_iteration))
+                print("Epoch {:02d}, Iter {:03d}, Loss: {:.4f}, lr_gen: {:.6f}, Time: {:.4f} seconds".format(
+                    epoch, step, avg_loss, lr_current, elapsed_time_iteration))
 
                 # Log to JSON
                 loss_log.append({
                     "epoch": epoch,
                     "iteration": iteration,
-                    "regression_nocs_loss": avg_running_regression_nocs_loss,
+                    "regression_nocs_loss": avg_loss,
                     "learning_rate": lr_current,
                     "time_per_100_iterations": elapsed_time_iteration
                 })
 
                 running_loss = 0
-                running_regression_nocs_loss = 0
 
                 embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
                 nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, embeddings)
@@ -210,7 +201,6 @@ def main(config):
 
         generator.eval()
         running_loss = 0.0
-        running_regression_nocs_loss = 0
 
         val_iter = 0
         start_time_epoch = time.time()
@@ -263,15 +253,9 @@ def main(config):
                 nocs_images_normalized_gt = nocs_images_normalized.to(device)
 
                 # forward pass through generator
-                regression_nocs_loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
-                
-                # LOSSES Summation
-                loss = 0
-                loss += config.w_NOCS_cont * regression_nocs_loss
+                loss = generator(rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, obj_names)
 
                 elapsed_time_iteration = time.time() - start_time_iteration  # Calculate elapsed time for the current iteration
-
-                running_regression_nocs_loss += regression_nocs_loss.item()
 
                 running_loss += loss.item()
 
@@ -279,11 +263,9 @@ def main(config):
 
         avg_loss = running_loss / val_iter
 
-        avg_running_regression_nocs_loss = running_regression_nocs_loss / val_iter
-
         loss_log.append({
             "epoch": epoch,
-            "val_regression_nocs_loss": avg_running_regression_nocs_loss,
+            "val_regression_nocs_loss": avg_loss,
             "val_learning_rate": lr_current,
             "val_time_per_100_iterations": elapsed_time_iteration
         })
