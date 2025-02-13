@@ -45,7 +45,7 @@ def main(config):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
-    generator = DiffusionNOCS(input_nc = 9, output_nc = 3, config.with_dino_feat, config.with_bart_feat, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    generator = DiffusionNOCS(input_nc = 9, output_nc = 3, with_dino_feat=config.with_dino_feat, with_bart_feat=config.with_bart_feat, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     generator.to(device)
     print(generator)
 
