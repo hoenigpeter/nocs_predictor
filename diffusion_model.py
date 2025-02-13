@@ -29,7 +29,7 @@ import torch.nn as nn
 # from sklearn.preprocessing import minmax_scale
 # from typing import List, Tuple
 # import numpy as np
-# import torchvision.transforms as T
+import torchvision.transforms as T
 
 # class TorchPCA(object):
 
@@ -975,7 +975,7 @@ class DiffusionNOCS(nn.Module):
 
         self.num_training_steps = num_training_steps
         self.num_inference_steps = num_inference_steps
-        
+
         self.norm = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
         self._transform = transforms.Compose([
             T.Resize((224, 224)),
