@@ -1040,7 +1040,7 @@ class DiffusionNOCS(nn.Module):
         elif self.with_bart_feat and not self.with_dino_feat:
             embeddings = self.get_bart_embeddings(obj_names)
         
-        else
+        else:
             print("pick either/or dino bart")
 
         return embeddings
