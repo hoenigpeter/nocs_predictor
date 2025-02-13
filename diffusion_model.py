@@ -345,7 +345,6 @@ class DiffusionNOCSDinoBART(nn.Module):
         self.train_noise_scheduler = DDPMScheduler(num_train_timesteps=num_training_steps)
         self.inference_noise_scheduler = DPMSolverSinglestepScheduler(num_train_timesteps=num_training_steps, algorithm_type="dpmsolver++", thresholding=True)
 
-        #self.noise_scheduler = DDPMScheduler(num_train_timesteps=num_training_steps)
         self.num_training_steps = num_training_steps
         self.num_inference_steps = num_inference_steps
 
@@ -356,7 +355,7 @@ class DiffusionNOCSDinoBART(nn.Module):
         bsz = nocs_gt.shape[0]
         # Sample a random timestep for each image
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
         ).long()
 
         noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
@@ -476,7 +475,7 @@ class DiffusionNOCSDinoBARTNormals(nn.Module):
         bsz = nocs_gt.shape[0]
 
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
         ).long()
 
         noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
@@ -770,7 +769,7 @@ class DiffusionNOCSDino(nn.Module):
         bsz = nocs_gt.shape[0]
 
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
         ).long()
 
         noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
@@ -873,7 +872,7 @@ class DiffusionNOCSBART(nn.Module):
         bsz = nocs_gt.shape[0]
 
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
         ).long()
 
         noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
@@ -983,7 +982,7 @@ class DiffusionNOCS(nn.Module):
         bsz = nocs_gt.shape[0]
 
         timesteps = torch.randint(
-            0, self.noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
         ).long()
 
         noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
