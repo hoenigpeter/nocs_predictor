@@ -934,7 +934,7 @@ class DiffusionNOCS(nn.Module):
             norm_layer          -- normalization layer
             use_dropout (bool)  -- whether to use dropout in intermediate layers
         """
-        super(DiffusionNOCSDinoBARTNormals, self).__init__()
+        super(DiffusionNOCS, self).__init__()
 
         self.model = UNet2DConditionModel(
             sample_size=image_size,  # the target image resolution
