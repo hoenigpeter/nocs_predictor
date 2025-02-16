@@ -526,7 +526,7 @@ def preprocess(image, size, interpolation, augment=False, center_crop=False, is_
         #                             ], random_order=True)
 
         seq_syn = iaa.Sequential([
-                            #iaa.Sometimes(0.3 * prob, iaa.CoarseDropout(p=0.2, size_percent=0.05)),
+                            iaa.Sometimes(0.3 * prob, iaa.CoarseDropout(p=0.2, size_percent=0.05)),
                             iaa.Sometimes(0.5 * prob, iaa.Dropout(p=(0.0, 0.1)))
                             ], random_order=True)
 

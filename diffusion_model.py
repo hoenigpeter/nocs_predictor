@@ -1067,6 +1067,6 @@ class DiffusionNOCS(nn.Module):
 
             nocs_noise = previous_noisy_sample
 
-        nocs_estimated = ((nocs_noise + 1 ) / 2)
+        #nocs_estimated = ((nocs_noise + 1 ) / 2)
 
         return nocs_estimated
