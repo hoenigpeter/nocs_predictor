@@ -9,7 +9,7 @@ from PIL import Image
 import pickle
 import time
 
-from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_environment, \
+from utils import WebDatasetWrapper, preprocess, setup_environment, \
                     create_webdataset_test, custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
                     preload_pointclouds, plot_single_image, COCODataset, CustomDataset, \
                     collate_fn, collate_fn_val, restore_original_bbox_crop, overlay_nocs_on_rgb,\
@@ -20,7 +20,7 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
                     
 from nocs_paper_utils import compute_degree_cm_mAP, draw_detections, draw_3d_bbox
 from nocs_paper_aligning import estimateSimilarityTransform
-from diffusion_model import DiffusionNOCSDino, DiffusionNOCSDinoBART, DiffusionNOCSDinoBARTNormals
+from diffusion_model import DiffusionNOCS
 
 def project_pointcloud_to_image(pointcloud, pointnormals, fx, fy, cx, cy, image_shape):
     """
@@ -90,7 +90,7 @@ def main(config):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    generator = DiffusionNOCSDinoBARTNormals(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    generator = DiffusionNOCS(input_nc = 9, output_nc = 3, with_dino_feat = config.with_dino_feat, with_bart_feat = config.with_bart_feat, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
     
     model_path = os.path.join(config.weight_dir, config.weight_file)
     state_dict = torch.load(model_path, map_location=device)
@@ -209,12 +209,12 @@ def main(config):
                 dst[:, 1] = -dst[:, 1]
                 dst = dst.T
                 
-                combined_embeddings = generator.get_embeddings(rgb_images_gt, category_names[idx])
+                embeddings = generator.get_embeddings(rgb_images_gt, category_names[idx])
 
                 for ref_step in range(config.num_refinement_steps):
                     print("Refinement step: ", ref_step)
 
-                    nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, combined_embeddings)
+                    nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, embeddings)
 
                     nocs_estimated_np = (nocs_estimated).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
                     nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadatas[idx], interpolation=Image.NEAREST)

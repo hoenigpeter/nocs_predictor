@@ -25,7 +25,7 @@ test_images_root = "/ssd3/real_camera_dataset/real_test"
 
 class_name = None
 num_categories = 6
-num_points_to_sample = 1000
+num_points_to_sample = 100
 
 ################## EMBEDDINGS ###########################
 with_dino_feat = True
@@ -33,8 +33,8 @@ with_bart_feat = False
 #########################################################
 
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_pbr_all_obj_160px_oriented_normals_DINO_only"
-weight_dir = "./weights_" + experiment_name
+experiment_name = "camera_pbr_all_obj_160px_oriented_normals_6_ref_all_inliers"
+weight_dir = "./weights_camera_pbr_all_obj_160px_oriented_normals2"
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
 

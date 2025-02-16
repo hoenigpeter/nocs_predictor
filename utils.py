@@ -822,7 +822,9 @@ def teaserpp_solve(src, dst, config):
 
     # Get the solution
     solution = teaserpp_solver.getSolution()
-    inliers = teaserpp_solver.getRotationInliers()
+    R_inliers = teaserpp_solver.getRotationInliers()
+    t_inliers = teaserpp_solver.getTranslationInliers()
+    s_inliers = teaserpp_solver.getScaleInliers()
     #print("Solution is:", solution)
 
     # Extract rotation, translation, and scale from the solution
@@ -830,7 +832,7 @@ def teaserpp_solve(src, dst, config):
     t = solution.translation
     s = solution.scale
 
-    return R, t, s, len(inliers)
+    return R, t, s, len(R_inliers), len(t_inliers), len(s_inliers)
 
 def backproject(depth, intrinsics, instance_mask=None):
     intrinsics = np.array([[intrinsics['fx'], 0, intrinsics['cx']], [0, intrinsics['fy'], intrinsics['cy']],[0,0,1]])

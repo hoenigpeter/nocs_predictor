@@ -49,27 +49,27 @@ import torchvision.transforms as T
 #         projected = t0 @ self.components_.T
 #         return projected
     
-# def pca(image_feats, mask_tensor, dim=3, fit_pca=None, use_torch_pca=True, max_samples=None):
-#     device = image_feats.device
-#     masks = mask_tensor[0][0].detach().cpu().numpy()[None]
-#     features = np.transpose(image_feats.detach().cpu().numpy(), (0, 2, 3, 1)) 
-#     print("features: ", features.shape)
-#     print("masks: ", masks.shape)
-#     pca = PCA(n_components=6)
+def pca(image_feats, mask_tensor, dim=3, fit_pca=None, use_torch_pca=True, max_samples=None):
+    device = image_feats.device
+    masks = mask_tensor[0][0].detach().cpu().numpy()[None]
+    features = np.transpose(image_feats.detach().cpu().numpy(), (0, 2, 3, 1)) 
+    print("features: ", features.shape)
+    print("masks: ", masks.shape)
+    pca = PCA(n_components=6)
 
-#     num_maps, map_w, map_h = features.shape[0:3]
-#     masked_features = features[masks.astype(bool)]
+    num_maps, map_w, map_h = features.shape[0:3]
+    masked_features = features[masks.astype(bool)]
 
-#     masked_features_pca = pca.fit_transform(masked_features)
-#     masked_features_pca = minmax_scale(masked_features_pca)
+    masked_features_pca = pca.fit_transform(masked_features)
+    masked_features_pca = minmax_scale(masked_features_pca)
 
-#     # Initialize images for PCA reduced features
-#     features_pca_reshaped = np.zeros((num_maps, map_w, map_h, masked_features_pca.shape[-1]))
+    # Initialize images for PCA reduced features
+    features_pca_reshaped = np.zeros((num_maps, map_w, map_h, masked_features_pca.shape[-1]))
 
-#     # Fill in the PCA results only at the masked regions
-#     features_pca_reshaped[masks.astype(bool)] = masked_features_pca
+    # Fill in the PCA results only at the masked regions
+    features_pca_reshaped[masks.astype(bool)] = masked_features_pca
 
-#     return features_pca_reshaped[0]
+    return features_pca_reshaped[0]
 
 # class UnNormalize(object):
 #     def __init__(self, mean, std):
@@ -1003,9 +1003,9 @@ class DiffusionNOCS(nn.Module):
 
         return loss
 
-    def get_bart_embeddings(self, obj_names):
+    def get_bart_embeddings(self, obj_names, device):
 
-        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(self.bart_tokenizer.device)
+        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(device)
         with torch.no_grad():
             bart_embeddings = self.bart_model(**tokens)  
 
@@ -1029,7 +1029,7 @@ class DiffusionNOCS(nn.Module):
         # combined embeddings
         if self.with_dino_feat and self.with_bart_feat:
             dino_embeddings = self.get_dino_embeddings(rgb_image)
-            bart_embeddings = self.get_bart_embeddings(obj_names)
+            bart_embeddings = self.get_bart_embeddings(obj_names, rgb_image.device)
 
             repeat_factor = (dino_embeddings.size(1) + bart_embeddings.size(1) - 1) // bart_embeddings.size(1)
             bart_repeated = bart_embeddings.repeat(1, repeat_factor, 1)
@@ -1043,7 +1043,7 @@ class DiffusionNOCS(nn.Module):
 
         # bart only
         elif self.with_bart_feat and not self.with_dino_feat:
-            embeddings = self.get_bart_embeddings(obj_names)
+            embeddings = self.get_bart_embeddings(obj_names, rgb_image.device)
         
         else:
             print("pick either/or dino bart")
