@@ -215,6 +215,7 @@ def main(config):
                     print("Refinement step: ", ref_step)
 
                     nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, embeddings)
+                    nocs_estimated = ((nocs_estimated + 1 ) / 2)
 
                     nocs_estimated_np = (nocs_estimated).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
                     nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadatas[idx], interpolation=Image.NEAREST)
@@ -250,7 +251,8 @@ def main(config):
                         print("t_inliers: ", t_inliers)
                         print("s_inliers: ", s_inliers)
 
-                        inliers = (R_inliers + t_inliers + s_inliers) / 3
+                        #inliers = (R_inliers + t_inliers + s_inliers) / 3
+                        inliers = R_inliers
 
                         # print("###########################################################")
                         # print("TEASER++")

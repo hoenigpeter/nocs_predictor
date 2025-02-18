@@ -1010,7 +1010,6 @@ class DiffusionNOCS(nn.Module):
             bart_embeddings = self.bart_model(**tokens)  
 
         bart_embeddings = bart_embeddings.last_hidden_state
-        print("bart_embeddings: ", bart_embeddings.shape)
         return bart_embeddings
 
     def get_dino_embeddings(self, rgb_image):
@@ -1020,8 +1019,6 @@ class DiffusionNOCS(nn.Module):
             dino_embeddings = self.dino_model(rgb_image)
 
         dino_embeddings = dino_embeddings.last_hidden_state
-        print("dino_embeddings: ", dino_embeddings.shape)
-
         return dino_embeddings
 
     def get_embeddings(self, rgb_image, obj_names):
@@ -1068,5 +1065,181 @@ class DiffusionNOCS(nn.Module):
             nocs_noise = previous_noisy_sample
 
         #nocs_estimated = ((nocs_noise + 1 ) / 2)
+        nocs_estimated = nocs_noise
+
+        return nocs_estimated
+
+class SCOPE(nn.Module):
+    def __init__(self, input_nc=9, output_nc=3, with_dino_feat=True, with_bart_feat=True, cls_embedding=False, num_class_embeds=None, image_size=160, num_training_steps=1000, num_inference_steps=50):
+
+        super(SCOPE, self).__init__()
+
+        self.model = self.build_model(image_size=image_size, input_nc=input_nc, output_nc=output_nc, cls_embedding=cls_embedding, num_class_embeds=num_class_embeds)
+
+        self.with_dino_feat = with_dino_feat
+        self.with_bart_feat = with_bart_feat
+        self.cls_embedding = cls_embedding
+
+        if self.with_dino_feat:
+            self.dino_model = AutoModel.from_pretrained('facebook/dinov2-base')
+
+        if self.with_bart_feat:
+            self.bart_model = BartModel.from_pretrained('facebook/bart-base')
+            self.bart_tokenizer = BartTokenizer.from_pretrained('facebook/bart-base')
+
+        self.train_noise_scheduler = DDPMScheduler(num_train_timesteps=num_training_steps)
+        self.inference_noise_scheduler = DPMSolverSinglestepScheduler(num_train_timesteps=num_training_steps, algorithm_type="dpmsolver++", thresholding=True)
+
+        self.num_training_steps = num_training_steps
+        self.num_inference_steps = num_inference_steps
+
+        self.norm = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+        self._transform = transforms.Compose([
+            T.Resize((224, 224)),
+            self.norm,
+        ])
+
+    def build_model(self, image_size=160, input_nc=9, output_nc=3, cls_embedding=False, num_class_embeds=None):
+        if cls_embedding == False:
+            return UNet2DConditionModel(
+            sample_size=image_size,  # the target image resolution
+            in_channels=input_nc,  # the number of input channels, 3 for RGB images
+            out_channels=output_nc,  # the number of output channels
+            layers_per_block=2,  # how many ResNet layers to use per UNet block
+            block_out_channels=(128, 128, 256, 256, 512, 512),  # the number of output channels for each UNet block
+            down_block_types=(
+                "DownBlock2D",  # a regular ResNet downsampling block
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",  # a ResNet downsampling block with spatial self-attention
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",  # a regular ResNet upsampling block
+                "AttnUpBlock2D",  # a ResNet upsampling block with spatial self-attention
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+            cross_attention_dim=768,
+        )
+        else:
+            return UNet2DModel(
+            sample_size=image_size,
+            in_channels=input_nc,
+            out_channels=output_nc,
+            num_class_embeds=num_class_embeds,
+            layers_per_block=2,
+            block_out_channels=(128, 128, 256, 256, 512, 512),
+            down_block_types=(
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
+                "DownBlock2D",
+                "AttnDownBlock2D",
+                "DownBlock2D",
+            ),
+            up_block_types=(
+                "UpBlock2D",
+                "AttnUpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+                "UpBlock2D",
+            ),
+        )
+
+    def forward(self, inputs, nocs_gt, embeddings, obj_cats):
+        noise = torch.randn(nocs_gt.shape, dtype=nocs_gt.dtype, device=nocs_gt.device)
+
+        bsz = nocs_gt.shape[0]
+
+        timesteps = torch.randint(
+            0, self.train_noise_scheduler.config.num_train_timesteps, (bsz,), device=nocs_gt.device
+        ).long()
+
+        noisy_latents = self.train_noise_scheduler.add_noise(nocs_gt, noise, timesteps)
+
+        latents = torch.cat([inputs, noisy_latents], dim=1)
+
+        if self.cls_embedding == False:
+            model_output = self.model(sample=latents, timestep=timesteps, encoder_hidden_states=embeddings).sample
+        else:
+            model_output = self.model(sample=latents, timestep=timesteps, class_labels=obj_cats).sample
+
+        loss = F.mse_loss(model_output.float(), noise.float(), reduction="mean")
+
+        return loss
+
+    def get_bart_embeddings(self, obj_names, device):
+
+        tokens = self.bart_tokenizer(obj_names, return_tensors="pt", padding=True).to(device)
+        with torch.no_grad():
+            bart_embeddings = self.bart_model(**tokens)  
+
+        bart_embeddings = bart_embeddings.last_hidden_state
+
+        return bart_embeddings
+
+    def get_dino_embeddings(self, rgb_image):
+        rgb_image = self._transform(((rgb_image + 1) / 2))
+
+        with torch.no_grad():
+            dino_embeddings = self.dino_model(rgb_image)
+
+        dino_embeddings = dino_embeddings.last_hidden_state
+
+        return dino_embeddings
+
+    def get_embeddings(self, rgb_image, obj_names):
+
+        # combined embeddings
+        if self.with_dino_feat and self.with_bart_feat:
+            dino_embeddings = self.get_dino_embeddings(rgb_image)
+            bart_embeddings = self.get_bart_embeddings(obj_names, rgb_image.device)
+
+            repeat_factor = (dino_embeddings.size(1) + bart_embeddings.size(1) - 1) // bart_embeddings.size(1)
+            bart_repeated = bart_embeddings.repeat(1, repeat_factor, 1)
+            bart_repeated = bart_repeated[:, :dino_embeddings.size(1), :]
+        
+            embeddings = torch.cat((dino_embeddings, bart_repeated), dim=1)
+
+        # dino only
+        elif self.with_dino_feat and not self.with_bart_feat:
+            embeddings = self.get_dino_embeddings(rgb_image)
+
+        # bart only
+        elif self.with_bart_feat and not self.with_dino_feat:
+            embeddings = self.get_bart_embeddings(obj_names, rgb_image.device)
+        
+        else:
+            print("pick either/or dino bart")
+
+        return embeddings
+
+    def inference(self, inputs, embeddings, obj_cats):
+        self.inference_noise_scheduler.set_timesteps(self.num_inference_steps)
+        nocs_noise = torch.randn(inputs[:, :3, :, :].shape, dtype=inputs.dtype, device=inputs.device)
+
+        for timestep in tqdm(self.inference_noise_scheduler.timesteps):
+
+            input = torch.cat(
+                [inputs, nocs_noise], dim=1
+            )  # this order is important
+
+            with torch.no_grad():
+                
+                if self.cls_embedding == False:
+                    noisy_residual = self.model(sample=input, timestep=timestep, encoder_hidden_states=embeddings).sample
+                else:
+                    noisy_residual = self.model(sample=input, timestep=timestep, class_labels=obj_cats).sample 
+
+            previous_noisy_sample = self.inference_noise_scheduler.step(noisy_residual, timestep, nocs_noise).prev_sample
+
+            nocs_noise = previous_noisy_sample
+
+        nocs_estimated = nocs_noise
 
         return nocs_estimated

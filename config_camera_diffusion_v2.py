@@ -29,12 +29,12 @@ num_points_to_sample = 100
 
 ################## EMBEDDINGS ###########################
 with_dino_feat = True
-with_bart_feat = False
+with_bart_feat = True
 #########################################################
 
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_pbr_all_obj_160px_oriented_normals_6_ref_all_inliers"
-weight_dir = "./weights_camera_pbr_all_obj_160px_oriented_normals2"
+experiment_name = "camera_pbr_all_obj_160px_oriented_normals_BART_DINO"
+weight_dir = "./weights_camera_pbr_all_obj_160px_oriented_normals_BART_DINO"
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
 
@@ -57,7 +57,7 @@ image_size = 160
 num_training_steps = 1000
 num_inference_steps = 10
 
-weight_file = 'generator_epoch_50.pth'
+weight_file = 'generator_epoch_35.pth'
 
 # Optimizer Settings
 lr = 1e-4

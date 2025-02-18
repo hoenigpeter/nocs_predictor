@@ -51,7 +51,6 @@ def main(config):
 
     # Optimizer instantiation
     optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), eps=config.epsilon)
-    #optimizer_generator = optim.Adam(generator.parameters(), lr=config.lr)
 
     # Instantiate train and val dataset + dataloaders
     train_dataset = create_webdataset(config.train_data_root, config.image_size, config.shuffle_buffer, augment=config.augmentation, center_crop=config.center_crop, class_name=config.class_name)
