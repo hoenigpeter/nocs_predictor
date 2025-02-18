@@ -1,6 +1,6 @@
 ####### General Training Settings
 max_epochs = 100
-batch_size = 2
+batch_size = 8
 test_batch_size = 1
 shuffle_buffer = 1000
 save_epoch_interval = 5
@@ -43,11 +43,11 @@ noisy_normals = True
 
 ################## EMBEDDINGS ###########################
 with_dino_feat = False
-with_bart_feat = False
-with_cls_embedding = True          # embedding of cls id
+with_bart_feat = True
+with_cls_embedding = False          # embedding of cls id
 
-with_dino_concat = False
-dino_mode = "featup_pca"
+with_dino_concat = True
+dino_mode = "dino_pca"
 # or: "dino_diff_nocs_pca"   -> original DiffusionNOCS dino + alread fit PCA
 # or: "featup_pca"          -> Dinov2 # FeatUp 
 # or: "dino_pca"            -> Dinov2 + fit_transform PCA
@@ -86,4 +86,4 @@ val_num_workers = 1
 
 # Visualization Settings
 iter_cnt = 1
-num_imgs_log = 2
+num_imgs_log = 8

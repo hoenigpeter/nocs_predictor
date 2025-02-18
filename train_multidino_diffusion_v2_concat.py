@@ -11,8 +11,6 @@ import torch
 import torch.nn.functional as F
 import torch.nn as nn
 import torch.optim as optim
-from torch.nn.parallel import DistributedDataParallel as DDP
-import torch.distributed as dist
 
 import json
 import webdataset as wds
@@ -24,20 +22,18 @@ from utils import WebDatasetWrapper, preprocess, normalize_quaternion, setup_env
 
 from diffusion_model import DiffusionNOCS, SCOPE
 
+def save_config(config):
+    config_path = os.path.join(config.weight_dir, "config.py")
+    with open(config_path, "w") as f:
+        for key, value in vars(config).items():
+            f.write(f"{key} = {repr(value)}\n")
+
 # Create a lookup function
 def lookup(category_id, objects):
     obj_dict = {obj["id"]: obj["name"] for obj in objects}
     return obj_dict.get(category_id, "Unknown")  # Default to "Unknown" if ID is not found
 
 def main(config):
-
-    torch.cuda.set_device(int(os.environ["LOCAL_RANK"]))
-    dist.init_process_group("nccl")
-    rank = dist.get_rank()
-    print(f"Start running basic DDP example on rank {rank}.")
-    # create model and move it to GPU with id rank
-    device = rank % torch.cuda.device_count()
-    print("device_id: ", device)
 
     objects = [
         {"id": 0, "name": "bottle"},
@@ -50,8 +46,9 @@ def main(config):
 
     setup_environment(str(config.gpu_id))
     make_log_dirs([config.weight_dir, config.val_img_dir])
-
-    #device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    save_config(config)
+    
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Model instantiation and compilation
     if config.with_dino_concat == True:
@@ -59,7 +56,7 @@ def main(config):
     else:
         input_nc = 9
 
-    model = SCOPE(
+    generator = SCOPE(
                         input_nc = input_nc,
                         output_nc = 3,
                         with_dino_feat=config.with_dino_feat,
@@ -71,9 +68,7 @@ def main(config):
                         num_inference_steps=config.num_inference_steps
                     )
 
-    model.to(device)
-    generator = DDP(model, device_ids=[device])
-
+    generator.to(device)
     print(generator)
 
     # Optimizer instantiation
@@ -262,7 +257,7 @@ def main(config):
                     inputs = torch.cat([rgb_images_gt, normal_images_gt], dim=1)
 
                 with torch.no_grad():
-                    nocs_estimated = generator.module.inference(inputs, embeddings, obj_cats_tensor)
+                    nocs_estimated = generator.inference(inputs, embeddings, obj_cats_tensor)
 
                 imgfn = config.val_img_dir + "/{:03d}_{:03d}.jpg".format(epoch, iteration)
                 plot_progress_imgs_v2(imgfn, rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, dino_images_gt[:, :3, :, :], config)
@@ -278,100 +273,102 @@ def main(config):
         val_iter = 0
         start_time_epoch = time.time()
 
-        # with torch.no_grad():
-        #     for step, batch in enumerate(val_dataloader):
-        #         start_time_iteration = time.time()
+        with torch.no_grad():
+            for step, batch in enumerate(val_dataloader):
+                start_time_iteration = time.time()
 
-        #         # unwrap the batch
-        #         rgb_images = batch['rgb']
-        #         nocs_images = batch['nocs']
+                # unwrap the batch
+                rgb_images = batch['rgb']
+                nocs_images = batch['nocs']
 
-        #         if config.noisy_normals == True:
-        #             normal_images = batch['normals_with_aug']
-        #         else:
-        #             normal_images = batch['normals_no_aug']
+                if config.noisy_normals == True:
+                    normal_images = batch['normals_with_aug']
+                else:
+                    normal_images = batch['normals_no_aug']
 
-        #         mask_images = batch['mask']
-        #         dino_images = batch['dino_pca']
-        #         infos = batch['info']
+                mask_images = batch['mask']
+                dino_images = batch['dino_pca']
+                infos = batch['info']
 
-        #         obj_names = []
-        #         obj_cats = []
+                obj_names = []
+                obj_cats = []
 
-        #         for entry in infos:
-        #             obj_cat = int(entry["category_id"])
-        #             obj_cats.append(obj_cat)
-        #             obj_name = lookup(obj_cat, objects)
-        #             obj_names.append(obj_name)
+                for entry in infos:
+                    obj_cat = int(entry["category_id"])
+                    obj_cats.append(obj_cat)
+                    obj_name = lookup(obj_cat, objects)
+                    obj_names.append(obj_name)
 
-        #         obj_cats_tensor = torch.tensor(obj_cats, dtype=torch.int).to(device)
+                obj_cats_tensor = torch.tensor(obj_cats, dtype=torch.int).to(device)
 
-        #         # Normalize mask to be binary (0 or 1)
-        #         binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
-        #         binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
+                # Normalize mask to be binary (0 or 1)
+                binary_mask = (mask_images > 0).float()  # Converts mask to 0 or 1
+                binary_mask = binary_mask.permute(0, 3, 1, 2).to(device)  # Make sure mask has same shape
                 
-        #         # RGB processing
-        #         rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
-        #         rgb_images = rgb_images.permute(0, 3, 1, 2)
-        #         rgb_images = rgb_images.to(device)
-        #         rgb_images = rgb_images * binary_mask
-        #         rgb_images_gt = (rgb_images.float() / 127.5) - 1
+                # RGB processing
+                rgb_images = torch.clamp(rgb_images.float(), min=0.0, max=255.0)
+                rgb_images = rgb_images.permute(0, 3, 1, 2)
+                rgb_images = rgb_images.to(device)
+                rgb_images = rgb_images * binary_mask
+                rgb_images_gt = (rgb_images.float() / 127.5) - 1
 
-        #         # Normals processing
-        #         normal_images = torch.clamp(normal_images.float(), min=0.0, max=255.0)
-        #         normal_images = normal_images.permute(0, 3, 1, 2)
-        #         normal_images = normal_images.to(device)
-        #         normal_images = normal_images * binary_mask
-        #         normal_images_gt = (normal_images.float() / 127.5) - 1
+                # Normals processing
+                normal_images = torch.clamp(normal_images.float(), min=0.0, max=255.0)
+                normal_images = normal_images.permute(0, 3, 1, 2)
+                normal_images = normal_images.to(device)
+                normal_images = normal_images * binary_mask
+                normal_images_gt = (normal_images.float() / 127.5) - 1
 
-        #         # DINO images processing
-        #         dino_images = torch.clamp(dino_images.float(), min=0.0, max=255.0)
-        #         dino_images = dino_images.permute(0, 3, 1, 2)
-        #         dino_images = dino_images.to(device)
-        #         #normal_images = normal_images * binary_mask
-        #         dino_images_gt = (dino_images.float() / 127.5) - 1
+                # DINO images processing
+                dino_images = torch.clamp(dino_images.float(), min=0.0, max=255.0)
+                dino_images = dino_images.permute(0, 3, 1, 2)
+                dino_images = dino_images.to(device)
+                #normal_images = normal_images * binary_mask
+                dino_images_gt = (dino_images.float() / 127.5) - 1
 
-        #         # MASK processing
-        #         mask_images_gt = mask_images.float() / 255.0
-        #         mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
-        #         mask_images_gt = mask_images_gt.to(device)
+                # MASK processing
+                mask_images_gt = mask_images.float() / 255.0
+                mask_images_gt = mask_images_gt.permute(0, 3, 1, 2)
+                mask_images_gt = mask_images_gt.to(device)
 
-        #         # NOCS processing
-        #         nocs_images_float = nocs_images.float()
-        #         nocs_images_normalized = (nocs_images_float / 127.5) - 1
-        #         nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
-        #         nocs_images_normalized_gt = nocs_images_normalized.to(device)
+                # NOCS processing
+                nocs_images_float = nocs_images.float()
+                nocs_images_normalized = (nocs_images_float / 127.5) - 1
+                nocs_images_normalized = nocs_images_normalized.permute(0, 3, 1, 2)
+                nocs_images_normalized_gt = nocs_images_normalized.to(device)
 
-        #         if config.with_cls_embedding == False:
-        #             embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
-        #         else:
-        #             embeddings = None
+                if config.with_cls_embedding == False:
+                    embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
+                else:
+                    embeddings = None
 
-        #         if config.with_dino_concat == True:
-        #             inputs = torch.cat([rgb_images_gt, normal_images_gt, dino_images_gt], dim=1)
-        #         else:
-        #             inputs = torch.cat([rgb_images_gt, normal_images_gt], dim=1)
+                if config.with_dino_concat == True:
+                    inputs = torch.cat([rgb_images_gt, normal_images_gt, dino_images_gt], dim=1)
+                else:
+                    inputs = torch.cat([rgb_images_gt, normal_images_gt], dim=1)
 
-        #         loss = generator(inputs, nocs_images_normalized_gt, embeddings, obj_cats_tensor)
+                loss = generator(inputs, nocs_images_normalized_gt, embeddings, obj_cats_tensor)
                 
-        #         elapsed_time_iteration = time.time() - start_time_iteration
+                elapsed_time_iteration = time.time() - start_time_iteration
 
-        #         running_loss += loss.item()
+                running_loss += loss.item()
 
-        #         val_iter+=1
+                val_iter+=1
 
-        # avg_loss = running_loss / val_iter
+                break
 
-        # loss_log.append({
-        #     "epoch": epoch,
-        #     "val_regression_nocs_loss": avg_loss,
-        #     "val_learning_rate": lr_current,
-        #     "val_time_per_100_iterations": elapsed_time_iteration
-        # })
+        avg_loss = running_loss / val_iter
+
+        loss_log.append({
+            "epoch": epoch,
+            "val_regression_nocs_loss": avg_loss,
+            "val_learning_rate": lr_current,
+            "val_time_per_100_iterations": elapsed_time_iteration
+        })
         
-        # elapsed_time_epoch = time.time() - start_time_epoch
-        # print("Time for the validation: {:.4f} seconds".format(elapsed_time_epoch))
-        # print("Val Loss: {:.4f}".format(avg_loss))
+        elapsed_time_epoch = time.time() - start_time_epoch
+        print("Time for the validation: {:.4f} seconds".format(elapsed_time_epoch))
+        print("Val Loss: {:.4f}".format(avg_loss))
 
         if config.with_cls_embedding == False:
             embeddings = generator.get_embeddings(rgb_images_gt, obj_names)
@@ -384,7 +381,7 @@ def main(config):
             inputs = torch.cat([rgb_images_gt, normal_images_gt], dim=1)
 
         with torch.no_grad():
-            nocs_estimated = generator.module.inference(inputs, embeddings, obj_cats_tensor)
+            nocs_estimated = generator.inference(inputs, embeddings, obj_cats_tensor)
 
         imgfn = config.val_img_dir + "/val_{:03d}.jpg".format(epoch)
         plot_progress_imgs_v2(imgfn, rgb_images_gt, normal_images_gt, nocs_images_normalized_gt, nocs_estimated, mask_images_gt, dino_images_gt[:, :3, :, :], config)
@@ -399,9 +396,6 @@ def main(config):
         epoch += 1
 
     torch.save(generator.state_dict(), os.path.join(config.weight_dir, f'generator_epoch_{epoch}.pth'))
-
-    dist.destroy_process_group()
-    print(f"Finished running basic DDP example on rank {rank}.")
 
 if __name__ == "__main__":
     args = parse_args()
