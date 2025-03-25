@@ -33,8 +33,8 @@ with_bart_feat = True
 #########################################################
 
 # Directories for Saving Weights and Validation Images
-experiment_name = "camera_pbr_all_obj_160px_oriented_normals_BART_DINO"
-weight_dir = "./weights_camera_pbr_all_obj_160px_oriented_normals_BART_DINO"
+experiment_name = "camera_pbr_all_obj_160px_oriented_normals_DINO_BART_only_v2"
+weight_dir = "./weights_camera_pbr_all_obj_160px_oriented_normals_DINO_BART_only_v2"
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
 
@@ -54,10 +54,10 @@ num_refinement_steps = 6
 # Input Data Settings
 image_size = 160
 
-num_training_steps = 1000
-num_inference_steps = 10
+num_training_steps = 1000   # watch out this parameter has also to be 1000 during inference
+num_inference_steps = 5
 
-weight_file = 'generator_epoch_35.pth'
+weight_file = 'generator_epoch_50.pth'
 
 # Optimizer Settings
 lr = 1e-4

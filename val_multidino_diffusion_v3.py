@@ -8,72 +8,20 @@ import matplotlib.pyplot as plt
 from PIL import Image
 import pickle
 import time
+import itertools
 
-from utils import WebDatasetWrapper, preprocess, setup_environment, \
-                    create_webdataset_test, custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
+from utils import preprocess, setup_environment, \
+                    custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
                     preload_pointclouds, plot_single_image, COCODataset, CustomDataset, \
                     collate_fn, collate_fn_val, restore_original_bbox_crop, overlay_nocs_on_rgb,\
                     paste_mask_on_black_canvas, paste_nocs_on_black_canvas, teaserpp_solve, \
                     backproject, sample_point_cloud, create_open3d_point_cloud, load_config, parse_args, \
                     create_line_set, show_pointcloud, filter_points, rotate_transform_matrix_180_z, combine_images_overlapping, \
-                    remove_duplicate_pixels, get_enlarged_bbox, crop_and_resize
+                    remove_duplicate_pixels, get_enlarged_bbox, crop_and_resize, project_pointcloud_to_image, create_pointnormals
                     
 from nocs_paper_utils import compute_degree_cm_mAP, draw_detections, draw_3d_bbox
 from nocs_paper_aligning import estimateSimilarityTransform
 from diffusion_model import DiffusionNOCS
-
-def project_pointcloud_to_image(pointcloud, pointnormals, fx, fy, cx, cy, image_shape):
-    """
-    Projects a 3D point cloud to a 2D image plane using the given camera intrinsics,
-    with pixel values set to the corresponding x, y, z values of the point normals.
-
-    Args:
-        pointcloud (np.ndarray): Array of shape (num_points, 3) containing 3D points (x, y, z).
-        pointnormals (np.ndarray): Array of shape (num_points, 3) containing point normals (nx, ny, nz).
-        intrinsics (np.ndarray): Camera intrinsics matrix of shape (3, 3).
-        image_shape (tuple): Shape of the output image (height, width, 3).
-
-    Returns:
-        np.ndarray: 2D image of shape (height, width, 3) with projected points.
-    """
-
-    # Extract 3D points
-    x, y, z = pointcloud[:, 0], pointcloud[:, 1], pointcloud[:, 2]
-
-    # Avoid division by zero
-    z = np.where(z == 0, 1e-6, z)
-
-    # Project points to the image plane
-    u = (x * fx / z) + cx
-    v = (y * fy / z) + cy
-
-    # Round to nearest integer and convert to pixel indices
-    u = np.round(u).astype(int)
-    v = np.round(v).astype(int)
-
-    # Create an empty image
-    height, width, _ = image_shape
-    image = np.zeros(image_shape, dtype=np.float32)
-
-    # Keep points within image bounds
-    valid_indices = (u >= 0) & (u < width) & (v >= 0) & (v < height)
-    u = u[valid_indices]
-    v = v[valid_indices]
-    normals = pointnormals[valid_indices]
-
-    # Project valid points onto the image
-    image[v, u] = normals  # Set pixel values to the point normals (nx, ny, nz)
-
-    return image
-
-def create_pointnormals(dst):
-    pcd_normals = create_open3d_point_cloud(dst, [1, 0, 0])
-    o3d.geometry.PointCloud.estimate_normals(pcd_normals)
-    pcd_normals.normalize_normals()
-    pcd_normals.orient_normals_towards_camera_location()
-    normals = np.asarray(pcd_normals.normals)
-
-    return normals
 
 def main(config):
     setup_environment(str(config.gpu_id))
@@ -106,7 +54,12 @@ def main(config):
     results = []
 
     with torch.no_grad():
+        
         for step, batch in enumerate(test_dataloader):
+            # if step < 3000:
+            #     print("Step: ", step)
+            #     continue  # Skip first 1000 batches
+
             print("Step: ", step)
 
             frame_id = batch['frame_id'][0]

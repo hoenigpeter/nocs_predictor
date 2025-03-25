@@ -1,3 +1,4 @@
+import sys
 import os
 import numpy as np
 import torch
@@ -9,23 +10,34 @@ from PIL import Image
 import pickle
 import time
 
-from utils import preprocess, normalize_quaternion, setup_environment, \
+from utils import preprocess, setup_environment, \
                     custom_collate_fn_test, make_log_dirs, plot_progress_imgs, \
                     preload_pointclouds, plot_single_image, COCODataset, CustomDataset, \
                     collate_fn, collate_fn_val, restore_original_bbox_crop, overlay_nocs_on_rgb,\
                     paste_mask_on_black_canvas, paste_nocs_on_black_canvas, teaserpp_solve, \
                     backproject, sample_point_cloud, create_open3d_point_cloud, load_config, parse_args, \
                     create_line_set, show_pointcloud, filter_points, rotate_transform_matrix_180_z, combine_images_overlapping, \
-                    remove_duplicate_pixels, get_enlarged_bbox, crop_and_resize, project_pointcloud_to_image, create_pointnormals
+                    remove_duplicate_pixels, get_enlarged_bbox, crop_and_resize, project_pointcloud_to_image, create_pointnormals, \
+                    DinoFeatures
                     
 from nocs_paper_utils import compute_degree_cm_mAP, draw_detections, draw_3d_bbox
 from nocs_paper_aligning import estimateSimilarityTransform
-from diffusion_model import DiffusionNOCSDino, DiffusionNOCSDinoBART, DiffusionNOCSDinoBARTNormals
+from diffusion_model import DiffusionNOCS, SCOPE
 
 def main(config):
     setup_environment(str(config.gpu_id))
     make_log_dirs([config.weight_dir, config.val_img_dir, config.ply_output_dir, config.pkl_output_dir, config.bboxes_output_dir, config.png_output_dir])
 
+    synset_names = [
+        'BG', #0
+        'bottle', #1
+        'bowl', #2
+        'camera', #3
+        'can',  #4
+        'laptop',#5
+        'mug'#6
+        ]
+    
     camera_intrinsics = {
         'fx': config.fx,
         'fy': config.fy,
@@ -37,7 +49,23 @@ def main(config):
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    generator = DiffusionNOCSDinoBARTNormals(input_nc = 9, output_nc = 3, image_size=config.image_size, num_training_steps=config.num_training_steps, num_inference_steps=config.num_inference_steps)
+    # Model instantiation and compilation
+    if config.with_dino_concat == True:
+        input_nc = 15
+    else:
+        input_nc = 9
+
+    generator = SCOPE(
+                        input_nc = input_nc,
+                        output_nc = 3,
+                        with_dino_feat=config.with_dino_feat,
+                        with_bart_feat=config.with_bart_feat,
+                        cls_embedding=config.with_cls_embedding,
+                        num_class_embeds=config.num_categories,
+                        image_size=config.image_size,
+                        num_training_steps=config.num_training_steps,
+                        num_inference_steps=config.num_inference_steps
+                    )
     
     model_path = os.path.join(config.weight_dir, config.weight_file)
     state_dict = torch.load(model_path, map_location=device)
@@ -45,6 +73,8 @@ def main(config):
     generator.load_state_dict(state_dict)
     generator.to(device)
     generator.eval() 
+
+    dino_model = DinoFeatures()
 
     dataset = CustomDataset(config.coco_json_path, config.test_images_root, image_size=config.image_size, augment=False)
     test_dataloader = DataLoader(dataset, batch_size=config.test_batch_size, shuffle=False, collate_fn=collate_fn_val)
@@ -54,6 +84,11 @@ def main(config):
 
     with torch.no_grad():
         for step, batch in enumerate(test_dataloader):
+
+            # if step < 1525:
+            #     print("Step: ", step)
+            #     continue  # Skip first 1000 batches
+
             print("Step: ", step)
 
             frame_id = batch['frame_id'][0]
@@ -86,6 +121,7 @@ def main(config):
 
             coords_list = []
             normals_list = []
+            dino_list = []
 
             pred_scales = []
             pred_RTs = []
@@ -115,10 +151,7 @@ def main(config):
                 rgb_images = rgb_images * binary_mask
                 rgb_images_gt = (rgb_images.float() / 127.5) - 1
 
-                print("mask_np: ", mask_np.shape)
                 mask_resized = restore_original_bbox_crop((mask_np * 255).astype(np.uint8), metadatas[idx])
-                print("mask_resized: ", mask_resized.shape)
-                print("metadatas[idx]: ", metadatas[idx])
                 mask_full_np = paste_mask_on_black_canvas((rgb_np * 255).astype(np.uint8), (mask_resized).astype(np.uint8), bboxes[idx])
 
                 dst, idxs = backproject(depth_images, camera_intrinsics, mask_full_np)
@@ -144,6 +177,46 @@ def main(config):
 
                 binary_mask = (mask_resized > 0).astype(np.uint8)
 
+                ###############################################################################################
+                rgb_data = rgb_cropped.permute(1, 2, 0).cpu().numpy()
+                mask_visib_data = mask_np
+                
+                print("rgb_data: ", rgb_data.shape)
+                print("mask_visib_data: ", mask_visib_data.shape)
+                # dino_mode = "dino_diff_nocs_pca"
+                # or: "dino_diff_nocs_pca"   -> original DiffusionNOCS dino + alread fit PCA
+                # or: "featup_pca"          -> Dinov2 # FeatUp 
+                # or: "dino_pca"            -> Dinov2 + fit_transform PCA
+
+                if config.dino_mode == "dino_pca":
+                    dino_images_gt = dino_model.get_pca_features(rgb_data, mask_visib_data, input_size=448, diffnocs_fit=False)
+                elif config.dino_mode == "dino_diff_nocs_pca":
+                    dino_images_gt = dino_model.get_pca_features(rgb_data, mask_visib_data, input_size=448, diffnocs_fit=True)
+                elif config.dino_mode == "featup_pca":
+                    dino_images_gt = dino_model.get_featup_features(rgb_data, mask_visib_data)
+                else:
+                    try:
+                        raise ValueError("************ you did something highly illegal *******************")
+                    except ValueError as e:
+                        print(e)
+                        exit(1)
+
+                # Display the image
+                # plt.imshow(dino_images_gt[:, :, :3])
+                # plt.axis("off")  # Hide axis for better visualization
+                # plt.show()
+
+                dino_images_gt = torch.tensor(dino_images_gt, dtype=torch.float32).to(device) 
+                dino_images_gt = dino_images_gt.permute(2, 0, 1)
+                dino_images_gt = dino_images_gt.unsqueeze(0)
+
+                print("dino_images_gt: ", dino_images_gt.shape)
+                print(f"cat_id: {type(category_ids[idx])}, value: {category_ids[idx]}")
+
+                obj_cats_tensor = torch.tensor(int(category_ids[idx])-1, dtype=torch.int).to(device)
+                
+                ###############################################################################################
+
                 max_inliers = 0.0
                 best_Rt = None
                 best_R = None
@@ -158,16 +231,30 @@ def main(config):
                 dst[:, 0] = -dst[:, 0]
                 dst[:, 1] = -dst[:, 1]
                 dst = dst.T
-                
-                combined_embeddings = generator.get_embeddings(rgb_images_gt, category_names[idx])
+
+                # forward pass through generator
+                if config.with_cls_embedding == False:
+                    embeddings = generator.get_embeddings(rgb_images_gt, category_names[idx])
+                else:
+                    embeddings = None
 
                 for ref_step in range(config.num_refinement_steps):
                     print("Refinement step: ", ref_step)
 
-                    nocs_estimated = generator.inference(rgb_images_gt, normal_images_gt, combined_embeddings)
+                    if config.with_dino_concat == True:
+                        inputs = torch.cat([rgb_images_gt, normal_images_gt, dino_images_gt], dim=1)
+                    else:
+                        inputs = torch.cat([rgb_images_gt, normal_images_gt], dim=1)
+
+                    nocs_estimated = generator.inference(inputs, embeddings, obj_cats_tensor)
+
+                    nocs_estimated = ((nocs_estimated + 1 ) / 2)
 
                     nocs_estimated_np = (nocs_estimated).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
                     nocs_estimated_resized = restore_original_bbox_crop((nocs_estimated_np * 255).astype(np.uint8), metadatas[idx], interpolation=Image.NEAREST)
+
+                    #dino_np = (dino_images_gt).squeeze().permute(1, 2, 0).cpu().numpy()  # Convert to HWC
+                    #dino_np = restore_original_bbox_crop((dino_np * 255).astype(np.uint8), metadatas[idx], interpolation=Image.NEAREST)
 
                     nocs_estimated_resized_holes = remove_duplicate_pixels(nocs_estimated_resized)
                     nocs_estimated_resized_masked = nocs_estimated_resized_holes.copy()
@@ -176,7 +263,8 @@ def main(config):
                     nocs_full_np = paste_nocs_on_black_canvas((rgb_np * 255).astype(np.uint8), nocs_estimated_resized_masked.astype(np.uint8), bboxes[idx])
                     nocs_full_np_save = paste_nocs_on_black_canvas((rgb_np * 255).astype(np.uint8), nocs_estimated_resized.astype(np.uint8), bboxes[idx])
                     normals_full_np_save = paste_nocs_on_black_canvas((rgb_np * 255).astype(np.uint8), normal_estimated_resized.astype(np.uint8), bboxes[idx])
-                    
+                    #dino_full_np_save = paste_nocs_on_black_canvas((dino_np * 255).astype(np.uint8), nocs_estimated_resized.astype(np.uint8), bboxes[idx])
+
                     nocs_full_np = (nocs_full_np.astype(float) / 127.5) - 1
                     src = nocs_full_np[idxs[0], idxs[1], :].T
 
@@ -200,7 +288,8 @@ def main(config):
                         print("t_inliers: ", t_inliers)
                         print("s_inliers: ", s_inliers)
 
-                        inliers = (R_inliers + t_inliers + s_inliers) / 3
+                        #inliers = (R_inliers + t_inliers + s_inliers) / 3
+                        inliers = R_inliers
 
                         # print("###########################################################")
                         # print("TEASER++")
@@ -225,6 +314,7 @@ def main(config):
                             best_dst_filtered = dst_filtered
                             best_nocs_full_np_save = nocs_full_np_save
                             best_normals_full_np_save = normals_full_np_save
+                            #best_dino_full_np_save = dino_full_np_save
 
                     if config.refinement == False:
                         break 
@@ -254,6 +344,7 @@ def main(config):
 
                     coords_list.append(best_nocs_full_np_save)
                     normals_list.append(best_normals_full_np_save)
+                    #dino_list.append(best_dino_full_np_save)
 
                     t1 = time.time()
                     print(f"Elapsed time: {t1 - t0:.4f} seconds")
@@ -265,6 +356,7 @@ def main(config):
 
                 coord_image_save_np = np.zeros((480, 640, 3), dtype=np.uint8)
                 normals_image_save_np = np.zeros((480, 640, 3), dtype=np.uint8)
+                dino_image_save_np = np.zeros((480, 640, 3), dtype=np.uint8)
 
                 for img in coords_list:
                     mask_temp = np.any(img != [0, 0, 0], axis=-1)
@@ -274,11 +366,16 @@ def main(config):
                     mask_temp = np.any(img != [0, 0, 0], axis=-1)
                     normals_image_save_np[mask_temp] = img[mask_temp]
 
+                # for img in dino_list:
+                #     mask_temp = np.any(img != [0, 0, 0], axis=-1)
+                #     dino_image_save_np[mask_temp] = img[mask_temp]
+
                 coord_image_save = Image.fromarray(coord_image_save_np)
                 normals_image_save = Image.fromarray(normals_image_save_np)
 
                 coord_image_save.save(config.png_output_dir + f"/scene_{scene_id}_{str(frame_id).zfill(4)}_coords.png")
                 normals_image_save.save(config.png_output_dir + f"/scene_{scene_id}_{str(frame_id).zfill(4)}_normals.png")
+                #normals_image_save.save(config.png_output_dir + f"/scene_{scene_id}_{str(frame_id).zfill(4)}_normals.png")
 
                 o3d.io.write_point_cloud(config.ply_output_dir + f"/scene_{scene_id}_{str(frame_id).zfill(4)}_pcl.ply", combined_pcd)
 
@@ -309,17 +406,7 @@ def main(config):
 
                 draw_3d_bbox(rgb_np, save_dir=config.bboxes_output_dir, data_name=scene_id, image_id=frame_id, intrinsics=camera_intrinsics,
                                 gt_RTs=result['gt_RTs'], gt_scales=result['gt_scales'], pred_RTs=result['pred_RTs'], pred_scales=result['pred_scales'])
-                
-                synset_names = [
-                    'BG', #0
-                    'bottle', #1
-                    'bowl', #2
-                    'camera', #3
-                    'can',  #4
-                    'laptop',#5
-                    'mug'#6
-                    ]
-                
+                               
                 pickle_file = config.pkl_output_dir + f"/results_real_test_scene_{int(scene_id)}_{int(frame_id):04d}.pkl"
 
                 with open(pickle_file, 'wb') as f:

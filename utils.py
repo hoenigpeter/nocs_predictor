@@ -6,7 +6,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from imgaug import augmenters as iaa
 import imgaug.augmenters as iaa  # noqa
-
+import cv2
 import numpy as np
 from PIL import Image
 import matplotlib.pyplot as plt
@@ -17,14 +17,248 @@ import open3d as o3d
 import io
 import PIL.Image
 
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import minmax_scale
+from typing import List, Tuple
+
+from transformers import AutoImageProcessor, AutoModel
+from torchvision import transforms
+import torch
+import torch.nn.functional as F
+import torchvision.transforms as T
+
 import argparse
 import importlib.util
 from torchvision import transforms
 import json
 import imageio
+from typing import List, Tuple
+import pickle
 
 from skimage.transform import SimilarityTransform
 
+class DinoFeatures:
+    def __init__(self) -> None:
+        device: str = "cuda"
+        self.device = device
+
+        self.dino_model = AutoModel.from_pretrained("./dinov2-small")
+        self.patch_size = self.dino_model.config.patch_size
+        self._feature_dim = self.dino_model.config.hidden_size
+        self.dino_model.to(device)
+        self.dino_model.eval()    
+
+        self.upsampler = torch.hub.load("mhamilton723/FeatUp", 'dinov2', use_norm=False).to(device)
+
+        # Normalization transform based on ImageNet
+        # self._transform = transforms.Compose([
+        #     self.norm
+        # ])
+
+        self.unnorm = UnNormalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
+        self.norm = T.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+
+        # PCA model from sklearn
+        self.diffnocs_pca = pickle.load(open("../nocs_renderer/pca6.pkl", "rb"))
+        self.torch_pca = TorchPCA(n_components=6, device=self.device)
+
+        self._transform = transforms.Compose([
+            T.ToTensor(),
+            T.Resize((224, 224)),
+            self.norm,
+        ])
+
+    def get_featup_features(self, rgb_image, mask_image):
+        image_tensor = self._transform(rgb_image)
+        image_tensor = image_tensor.unsqueeze(0).to(self.device)
+        
+        hr_feats = self.upsampler(image_tensor)
+
+        mask_tensor = F.interpolate(torch.Tensor(mask_image).unsqueeze(0).unsqueeze(0), size=(256, 256), mode='nearest')
+        featup_pca_features = self.featup_pca(hr_feats[0].unsqueeze(0), mask_tensor, dim=6)
+        featup_pca_features = np.clip(featup_pca_features, 0, 1)
+        featup_pca_resized = cv2.resize(featup_pca_features, (160, 160), interpolation=cv2.INTER_NEAREST)
+
+        return featup_pca_resized
+
+    def featup_pca(self, image_feats, masks, dim=3):
+        #pca = PCA(n_components=6)
+
+        features = np.transpose(image_feats.detach().cpu().numpy(), (0, 2, 3, 1)) 
+        num_maps, map_w, map_h = features.shape[0:3]
+        masks = masks[0][0].detach().cpu().numpy()[None]
+        masked_features = features[masks.astype(bool)]
+
+        masked_features_pca = self.torch_pca.fit(torch.tensor(masked_features, dtype=torch.float32).to(self.device)).transform(torch.tensor(masked_features, dtype=torch.float32).to(self.device)).numpy()
+
+        #masked_features_pca = pca.fit_transform(masked_features)
+        masked_features_pca = minmax_scale(masked_features_pca)
+
+        # Initialize images for PCA reduced features
+        features_pca_reshaped = np.zeros((num_maps, map_w, map_h, masked_features_pca.shape[-1]))
+
+        # Fill in the PCA results only at the masked regions
+        features_pca_reshaped[masks.astype(bool)] = masked_features_pca
+
+        return features_pca_reshaped[0]
+
+    def get_features(
+        self,
+        images: List[np.ndarray],
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        assert len(set(image.shape for image in images)) == 1, "Not all images have same shape"
+        im_w, im_h = images[0].shape[0:2]
+        assert (
+            im_w % self.patch_size == 0 and im_h % self.patch_size == 0
+        ), "Both width and height of the image must be divisible by patch size"
+
+        image_array = np.stack(images) / 255.0
+        input_tensor = torch.Tensor(np.transpose(image_array, [0, 3, 2, 1]))
+        input_tensor = self.norm(input_tensor).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.dino_model(input_tensor, output_hidden_states=True)
+        
+            # CLS token is first then patch tokens
+            class_tokens = outputs.last_hidden_state[:, 0, :]
+            patch_tokens = outputs.last_hidden_state[:, 1:, :]
+
+            if patch_tokens.is_cuda:
+                patch_tokens = patch_tokens.cpu()
+                class_tokens = class_tokens.cpu()
+
+            patch_tokens = patch_tokens.detach().numpy()
+            class_tokens = class_tokens.detach().numpy()
+
+            all_patches = patch_tokens.reshape(
+                [-1, im_w // self.patch_size, im_h // self.patch_size, self._feature_dim]
+            )
+        all_patches = np.transpose(all_patches, (0, 2, 1, 3))
+
+        return all_patches, class_tokens
+
+    def apply_pca(self, features: np.ndarray, masks: np.ndarray, diffnocs_fit=False) -> np.ndarray:
+        
+        num_maps, map_w, map_h = features.shape[0:3]
+        masked_features = features[masks.astype(bool)]
+        print("masked_features.shape: ", masked_features.shape)
+
+        num_samples, num_features = masked_features.shape
+
+        if num_samples < 6:
+            print("Warning: Not enough coloumns for PCA. Returning zeros.")
+            return np.zeros((num_maps, map_w, map_h, self.torch_pca.n_components))
+        
+        if diffnocs_fit:
+            pca = self.diffnocs_pca
+            masked_features_pca = pca.transform(masked_features)
+        else:
+            #pca = PCA(n_components=6)
+            #masked_features_pca = pca.fit_transform(masked_features)
+            masked_features_pca = self.torch_pca.fit(torch.tensor(masked_features, dtype=torch.float32).to(self.device)).transform(torch.tensor(masked_features, dtype=torch.float32).to(self.device)).numpy()
+
+        masked_features_pca = minmax_scale(masked_features_pca)
+
+        # Initialize images for PCA reduced features
+        features_pca_reshaped = np.zeros((num_maps, map_w, map_h, masked_features_pca.shape[-1]))
+
+        # Fill in the PCA results only at the masked regions
+        features_pca_reshaped[masks.astype(bool)] = masked_features_pca
+
+        return features_pca_reshaped
+
+    def get_pca_features(
+        self, rgb_image: np.ndarray, mask: np.ndarray, input_size: int = 448, diffnocs_fit=False
+    ) -> np.ndarray:
+        # Convert the mask to boolean type explicitly
+        mask = mask.astype(bool)
+        
+        assert rgb_image.shape[:2] == mask.shape, "Image and mask dimensions must match"
+        resized_rgb = cv2.resize(rgb_image * 255, (input_size, input_size))
+
+        patch_size = self.patch_size
+        resized_mask = cv2.resize(
+            mask.astype(np.uint8),  # Convert back to uint8 for resize
+            (input_size // patch_size, input_size // patch_size),
+            interpolation=cv2.INTER_NEAREST,
+        )
+
+        # Get patch tokens from the model
+        patch_tokens, _ = self.get_features([resized_rgb])
+
+        # Apply PCA to the patch tokens
+        pca_features = self.apply_pca(patch_tokens, resized_mask[None], diffnocs_fit=diffnocs_fit)
+
+        if pca_features is None or pca_features.size == 0:
+            print("Warning: PCA features are empty. Returning a zero-initialized output.")
+            return np.zeros((160, 160, self.torch_pca.n_components))
+        
+        # Resize the PCA features for visualization
+        resized_pca_features = transforms.functional.resize(
+                torch.tensor(pca_features[0]).permute(2, 0, 1),
+                size=(160, 160),
+                interpolation=transforms.InterpolationMode.NEAREST,
+            ).permute(1, 2, 0)
+
+        resized_pca_features = resized_pca_features.detach().cpu().numpy()
+        resized_pca_features = np.clip(resized_pca_features, 0, 1)
+
+        return resized_pca_features
+
+# from featUp github: https://github.com/mhamilton723/FeatUp
+class TorchPCA(object):
+    def __init__(self, n_components, device='cuda'):
+        self.n_components = n_components
+        self.device = device
+
+    def fit(self, X):
+        # Move data to the specified device (GPU or CPU)
+        X = X.to(self.device)
+
+        # Check if X has any elements
+        if X.numel() == 0:
+            raise ValueError("Input X is empty. PCA cannot be applied.")
+
+        self.mean_ = X.mean(dim=0)
+        unbiased = X - self.mean_.unsqueeze(0)
+
+        # Ensure that the number of components does not exceed data dimensions
+        min_dim = min(unbiased.shape)
+        if self.n_components > min_dim:
+            self.n_components = min_dim
+            print(f"Warning: Reducing n_components to {min_dim} due to small input size.")
+
+        if min_dim == 0:
+            raise ValueError("PCA cannot be applied on zero-dimensional input.")
+
+        U, S, V = torch.pca_lowrank(unbiased, q=self.n_components, center=False, niter=4)
+        self.components_ = V.T
+        self.singular_values_ = S
+        return self
+
+    def transform(self, X):
+        # Move data to the specified device (GPU or CPU)
+        X = X.to(self.device)
+        
+        t0 = X - self.mean_.unsqueeze(0)
+        projected = t0 @ self.components_.T
+        return projected.cpu()  # Move back to CPU for numpy conversion
+
+# from featUp github: https://github.com/mhamilton723/FeatUp
+class UnNormalize(object):
+    def __init__(self, mean, std):
+        self.mean = mean
+        self.std = std
+
+    def __call__(self, image):
+        image2 = torch.clone(image)
+        if len(image2.shape) == 4:
+            # batched
+            image2 = image2.permute(1, 0, 2, 3)
+        for t, m, s in zip(image2, self.mean, self.std):
+            t.mul_(s).add_(m)
+        return image2.permute(1, 0, 2, 3)
+    
 class CustomDataset(Dataset):
     def __init__(self, coco_json_path, root_dir, image_size=128, augment=False, center_crop=True, is_depth=False):
 
@@ -79,7 +313,7 @@ class CustomDataset(Dataset):
 
         for prediction in predictions:
             category_names.append(self.categories[prediction['category_id']])
-            category_ids.append(prediction['category_id'])
+            category_ids.append(int(prediction['category_id']))
             scores.append(prediction['score'])
 
             bbox = np.array(prediction['bbox'], dtype=int)
@@ -830,3 +1064,42 @@ def remove_duplicate_pixels(img_array):
     processed_array.reshape(-1, 3)[unique_indices] = flat_array[unique_indices]
     
     return processed_array
+
+def project_pointcloud_to_image(pointcloud, pointnormals, fx, fy, cx, cy, image_shape):
+    # Extract 3D points
+    x, y, z = pointcloud[:, 0], pointcloud[:, 1], pointcloud[:, 2]
+
+    # Avoid division by zero
+    z = np.where(z == 0, 1e-6, z)
+
+    # Project points to the image plane
+    u = (x * fx / z) + cx
+    v = (y * fy / z) + cy
+
+    # Round to nearest integer and convert to pixel indices
+    u = np.round(u).astype(int)
+    v = np.round(v).astype(int)
+
+    # Create an empty image
+    height, width, _ = image_shape
+    image = np.zeros(image_shape, dtype=np.float32)
+
+    # Keep points within image bounds
+    valid_indices = (u >= 0) & (u < width) & (v >= 0) & (v < height)
+    u = u[valid_indices]
+    v = v[valid_indices]
+    normals = pointnormals[valid_indices]
+
+    # Project valid points onto the image
+    image[v, u] = normals  # Set pixel values to the point normals (nx, ny, nz)
+
+    return image
+
+def create_pointnormals(dst):
+    pcd_normals = create_open3d_point_cloud(dst, [1, 0, 0])
+    o3d.geometry.PointCloud.estimate_normals(pcd_normals)
+    pcd_normals.normalize_normals()
+    pcd_normals.orient_normals_towards_camera_location()
+    normals = np.asarray(pcd_normals.normals)
+
+    return normals

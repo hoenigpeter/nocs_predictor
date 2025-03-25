@@ -165,6 +165,14 @@ cython_debug/
 /plys_*
 /pngs_*
 
+/_bboxes_*
+/_pkls_*
+/_plys_*
+/_pngs_*
+
+
+/OLD_*
+
 dinov2-small/
 pca6.pkl
 pca6.pkl.1

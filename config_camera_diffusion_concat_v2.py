@@ -33,7 +33,7 @@ refinement = True           # use refinement? (you should)
 num_refinement_steps = 6    # 6 works best
 
 num_training_steps = 1000   # standard for DDPM (dont change)
-num_inference_steps = 10    # standard for DPM++ solver (5 also good)
+num_inference_steps = 5    # standard for DPM++ solver (5 also good)
 num_points_to_sample = 100  # number of points that are sampled from NOCS and depth cloud before Teaser++
 
 #######################################################
@@ -47,15 +47,15 @@ with_bart_feat = True
 with_cls_embedding = False          # embedding of cls id
 
 with_dino_concat = True
-dino_mode = "dino_pca"
+dino_mode = "featup_pca"
 # or: "dino_diff_nocs_pca"   -> original DiffusionNOCS dino + alread fit PCA
 # or: "featup_pca"          -> Dinov2 # FeatUp 
 # or: "dino_pca"            -> Dinov2 + fit_transform PCA
 #########################################################
 
-# Directories for Saving Weights and Validation Images
-experiment_name = "camera_pbr_all_dinos_test"
-weight_dir = "./weights_" + experiment_name
+# Directories for Saving Weights and Validation Images 
+experiment_name = "camera_pbr_DiffusionNOCS_FeatUp"
+weight_dir = "./weights_camera_pbr_DiffusionNOCS_FeatUp"
 val_img_dir = "./val_img_" + experiment_name
 test_img_dir = "./test_img_" + experiment_name
 
@@ -64,7 +64,7 @@ pkl_output_dir = "./pkls_" + experiment_name
 png_output_dir = "./pngs_" + experiment_name
 bboxes_output_dir = "./bboxes_" + experiment_name
 
-weight_file = 'generator_epoch_35.pth'
+weight_file = 'generator_epoch_75.pth'
 
 ################# TEASER++ stuff dont touch this ##########
 noise_bound = 0.02  # 0.01
